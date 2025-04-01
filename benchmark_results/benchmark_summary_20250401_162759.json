@@ -1,0 +1,28 @@
+{
+  "system_info": {
+    "pytorch_version": "1.13.1+cu117",
+    "cuda_available": true,
+    "cuda_device": "NVIDIA GeForce RTX 4070 Ti SUPER",
+    "tensorrt_available": true,
+    "openvino_available": true
+  },
+  "backends": {
+    "tensorrt_gpu": {
+      "inference_time": 12.94088363647461,
+      "fps": 77.27447584656767,
+      "speed_ratio": 1.0
+    },
+    "pytorch_cpu": {
+      "inference_time": 52.774620056152344,
+      "fps": 18.94850211969309,
+      "speed_ratio": 4.07813110284093
+    },
+    "openvino_cpu": {
+      "inference_time": 31.33533000946045,
+      "fps": 31.912860011306407,
+      "speed_ratio": 2.4214212019602788
+    }
+  },
+  "fastest_backend": "tensorrt_gpu",
+  "timestamp": "2025-04-01 16:27:55"
+}
