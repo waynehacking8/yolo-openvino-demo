@@ -113,6 +113,90 @@ Key observations from batch benchmark:
 3.  **OpenVINO FP32/FP16 Sync** on CPU show limited scaling benefits from batching in this test; throughput remains relatively flat or slightly decreases.
 4.  **PyTorch CPU** shows minimal change with batch size, confirming its lower efficiency for parallel processing compared to optimized backends.
 
+## Docker Usage
+
+This project can also be run inside a Docker container, which includes all necessary dependencies and configurations.
+
+### Prerequisites
+
+-   [Docker](https://docs.docker.com/get-docker/) installed on your system.
+-   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed to enable GPU access within Docker containers (required for TensorRT GPU mode).
+
+### Building the Docker Image
+
+Ensure you have the `Dockerfile` and an up-to-date `requirements.txt` in the project root. Then, build the image using:
+
+```bash
+docker build -t yolo-openvino-demo:latest .
+```
+
+*Note: The initial build might take a while as it downloads the base image and installs dependencies.*
+
+### Running the Container
+
+To run commands inside the container, use `docker run`. Here are some common examples:
+
+**1. Running the Help Command (Default):**
+
+```bash
+docker run --rm yolo-openvino-demo:latest
+```
+*   `--rm`: Automatically remove the container when it exits.
+
+**2. Running TensorRT GPU Mode (Requires NVIDIA Container Toolkit):**
+
+You need to mount the model directory and potentially results/benchmark directories from your host machine into the container.
+
+```bash
+# Make sure your current directory is the project root on the host
+docker run --rm --gpus all \\
+    -v $(pwd)/models:/app/models \\
+    -v $(pwd)/test_images:/app/test_images \\
+    -v $(pwd)/yolov8n_openvino_model_int8:/app/yolov8n_openvino_model_int8 \\
+    -v $(pwd)/test_results:/app/test_results \\
+    -v $(pwd)/benchmark_results:/app/benchmark_results \\
+    yolo-openvino-demo:latest \\
+    python3 src/simple_demo.py --mode tensorrt_gpu --image test_images/800px-Cat03.jpg --output test_results/docker_trt_output.jpg
+```
+*   `--gpus all`: Grants the container access to all available GPUs.
+*   `-v $(pwd)/local_dir:/app/container_dir`: Mounts a directory from your host (`local_dir`) to a path inside the container (`container_dir`). We mount:
+    *   `models`: Contains the base `.pt` model.
+    *   `test_images`: Input images.
+    *   `yolov8n_openvino_model_int8`: INT8 model (adjust path if needed).
+    *   `test_results`: To save output images.
+    *   `benchmark_results`: To save benchmark plots/summaries.
+*   The command after the image name (`yolo-openvino-demo:latest`) overrides the default CMD and runs the TensorRT test.
+
+**3. Running OpenVINO INT8 Mode:**
+
+GPU access is not needed for OpenVINO CPU modes.
+
+```bash
+docker run --rm \\
+    -v $(pwd)/models:/app/models \\
+    -v $(pwd)/test_images:/app/test_images \\
+    -v $(pwd)/yolov8n_openvino_model_int8:/app/yolov8n_openvino_model_int8 \\
+    -v $(pwd)/test_results:/app/test_results \\
+    -v $(pwd)/benchmark_results:/app/benchmark_results \\
+    yolo-openvino-demo:latest \\
+    python3 src/simple_demo.py --mode openvino_cpu --precision INT8 --int8_model_dir ./yolov8n_openvino_model_int8 --image test_images/800px-Cat03.jpg --output test_results/docker_ov_int8_output.jpg
+```
+
+**4. Running Batch Benchmark:**
+
+```bash
+docker run --rm --gpus all \\
+    -v $(pwd)/models:/app/models \\
+    -v $(pwd)/test_images:/app/test_images \\
+    -v $(pwd)/yolov8n_openvino_model_int8:/app/yolov8n_openvino_model_int8 \\
+    -v $(pwd)/benchmark_results:/app/benchmark_results \\
+    yolo-openvino-demo:latest \\
+    python3 src/simple_demo.py --run_batch_benchmark --model yolov8n.pt --int8_model_dir ./yolov8n_openvino_model_int8 --benchmark_dir benchmark_results --save_summary --batch_sizes 1 2 4 8
+```
+
+**Explanation of Volume Mounts (`-v`):**
+
+Since the Docker image doesn't include the model files or output directories (as defined in `.dockerignore`), we use volume mounts to link directories from your host machine to directories inside the container. This allows the script running inside the container to access your models and save results back to your host machine. Adjust the host paths (`$(pwd)/...`) if your project structure differs or if models are stored elsewhere.
 
 ## Features
 
@@ -194,17 +278,4 @@ Quantizing models to INT8 with OpenVINO can significantly boost CPU performance 
     *   NNCF API might change between versions. We encountered:
         *   `AttributeError: module 'nncf' has no attribute 'Preset'`: Solution was to remove the `preset` argument from `nncf.quantize()` and use defaults.
         *   `TypeError: object of type 'Dataset' has no len()`: Solution was to calculate the number of calibration samples *before* creating the `nncf.Dataset` object and pass that count to `subset_size`.
-4.  **Asynchronous Callback Signature**: OpenVINO's `AsyncInferQueue.set_callback()` API might expect different arguments depending on the version. We encountered errors because the callback was passed extra arguments. Solution was to define the callback to accept extra arguments using `*args`: `def callback_func(request, *args): ...`.
-5.  **Model Loading Logic**: Ensure your inference script correctly checks for the `precision == 'INT8'` flag and uses the `--int8_model_dir` argument to load the *actual* INT8 model `.xml` file, not fall back to the FP32 version.
-6.  **Accurate Benchmarking**: Use `time.perf_counter()` instead of `time.time()` for measuring inference time to avoid potential issues with clock resolution or system time adjustments, which can lead to inaccurate or even negative timings.
-
-## Performance Tips
-
-For best performance:
-
-1. **TensorRT on GPU** provides the fastest inference times (~13.5ms / 74 FPS) for single image processing
-2. **TensorRT with batch processing** offers dramatically higher throughput for multiple images on GPU
-3. **OpenVINO on CPU** offers the best performance for batch processing on CPU
-4. When GPU is not available, **OpenVINO on CPU** offers significantly better performance than PyTorch CPU
-5. Batch sizes between 4-8 provide optimal throughput for CPU processing
-6. Image size significantly affects inference time; consider resizing for performance-critical applications
+4.  **Asynchronous Callback Signature**: OpenVINO's `AsyncInferQueue.set_callback()` API might expect different arguments depending on the version. We encountered errors because the callback was passed extra arguments. Solution was to define the callback to accept extra arguments using `*args`: `

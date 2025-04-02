@@ -1,0 +1,51 @@
+# Git files
+.git/
+.gitignore
+
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# IDE and OS specific files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docker files
+Dockerfile
+.dockerignore
+
+# Local config files (if any)
+# .env
+
+# Output directories (often mounted as volumes)
+benchmark_results/
+test_results/
+output/
+
+# Large model files (consider if they should be downloaded in the image or mounted)
+# *.pt
+# *.engine
+# *.onnx
+# models/
+yolov8n_openvino_model_int8/
+yolov8n_openvino_model/
+
+# Quantization files
+pot_config*
+quantize*
+nncf*
