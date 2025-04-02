@@ -9,6 +9,7 @@ import random
 import json
 import datetime
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 # Check CUDA and TensorRT availability on import
 print("\n=== 系統環境檢查 ===")
@@ -299,6 +300,22 @@ def main():
     parser.add_argument("--test_all", action="store_true", help="Test all images in test_images directory")
     parser.add_argument("--results_dir", type=str, default="test_results", help="Directory for detection results")
     parser.add_argument("--benchmark_dir", type=str, default="benchmark_results", help="Directory for benchmark results")
+    parser.add_argument('--precision', type=str, default='FP32', choices=['FP32', 'FP16', 'INT8'],
+                        help='Inference precision for OpenVINO (FP32, FP16, INT8)')
+    parser.add_argument('--int8_model_dir', type=str, default=None,
+                        help='Directory containing the INT8 quantized OpenVINO model (required if --precision INT8)')
+    parser.add_argument('--use_async', action='store_true',
+                        help='Use asynchronous inference API for OpenVINO')
+    parser.add_argument('--benchmark_openvino_modes', action='store_true',
+                        help='Run a detailed benchmark comparing different OpenVINO precision and execution modes (Sync/Async)')
+    parser.add_argument('--test_all_images_all_modes', action='store_true',
+                        help='Run all images in test_images through all available backend modes and save results.')
+    # Add new arguments for batch benchmark
+    parser.add_argument('--run_batch_benchmark', action='store_true',
+                        help='Run batch processing benchmark across all modes for various batch sizes.')
+    parser.add_argument('--batch_sizes', type=int, nargs='+', default=[1, 2, 4, 8, 16],
+                        help='List of batch sizes to test in batch benchmark (default: 1 2 4 8 16).')
+
     args = parser.parse_args()
     
     # Summary information to save at the end
@@ -326,8 +343,41 @@ def main():
                 f.write(f"PyTorch Version: {torch.__version__}\n")
         return
     
-    # Run benchmark mode if requested
-    if args.compare_all:
+    # Check for the new OpenVINO benchmark mode FIRST
+    if args.benchmark_openvino_modes:
+        # Ensure the function run_openvino_benchmark is defined elsewhere in the file
+        # We assume it will be added in subsequent edits if not already present
+        print("Detected --benchmark_openvino_modes flag.") # Add print for debugging
+        # Check if the function exists before calling (defensive programming)
+        if 'run_openvino_benchmark' in globals():
+             results = run_openvino_benchmark(args)
+             if args.save_summary:
+                 # Ensure benchmark directory exists
+                 os.makedirs(args.benchmark_dir, exist_ok=True)
+                 timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+
+                 # Save JSON results
+                 summary_filename = os.path.join(args.benchmark_dir, f"openvino_benchmark_summary_{timestamp}.json")
+                 with open(summary_filename, "w") as f:
+                     json.dump(results, f, indent=2)
+                 print(f"OpenVINO Benchmark summary saved to: {summary_filename}")
+
+                 # Plot results if data exists
+                 if results and "modes" in results and results["modes"]:
+                     # Ensure plot_benchmark_results is defined elsewhere
+                     if 'plot_benchmark_results' in globals():
+                          # Pass the modified title prefix
+                          plot_benchmark_results(results, args.benchmark_dir, timestamp, title_prefix="OpenVINO")
+                     else:
+                          print("Warning: plot_benchmark_results function not found, skipping plot generation.")
+                 else:
+                     print("No OpenVINO benchmark results to plot.")
+        else:
+             print("Error: run_openvino_benchmark function not found. Please ensure it's defined in the script.")
+        return # Exit after benchmark
+
+    # Existing logic for --compare_all
+    elif args.compare_all:
         results = run_benchmark_comparison(args)
         if args.save_summary:
             # 確保benchmark目錄存在
@@ -346,12 +396,30 @@ def main():
                 
         return
     
+    # Check for the new all images all modes test
+    elif args.test_all_images_all_modes:
+        print("Detected --test_all_images_all_modes flag.")
+        if 'run_all_images_all_modes' in globals():
+            run_all_images_all_modes(args)
+        else:
+            print("Error: run_all_images_all_modes function not found.")
+        return # Exit after this test run
+
+    # Add check for the new batch benchmark
+    elif args.run_batch_benchmark:
+        print("Detected --run_batch_benchmark flag.")
+        if 'run_batch_benchmark' in globals():
+            run_batch_benchmark(args)
+        else:
+            print("Error: run_batch_benchmark function not found.")
+        return # Exit after batch benchmark
+    
     # 確定要測試的模式
     modes_to_test = []
     if args.mode == "all":
-        modes_to_test = ["pytorch_cpu", "openvino_cpu"]
-        if torch.cuda.is_available() and TENSORRT_AVAILABLE:
-            modes_to_test.append("tensorrt_gpu")
+        modes_to_test = ["pytorch_cpu"]
+        if OPENVINO_AVAILABLE: modes_to_test.append("openvino_cpu")
+        if TENSORRT_AVAILABLE: modes_to_test.append("tensorrt_gpu")
     else:
         modes_to_test = [args.mode]
     
@@ -413,142 +481,317 @@ def main():
         print("Error: test_images目錄不存在!")
 
 def run_benchmark_comparison(args):
-    """運行所有可用後端的性能對比測試"""
-    print("Running performance comparison across all available backends...")
-    backends = []
-    
-    # Check which backends are available
-    if torch.cuda.is_available():
-        # Check if TensorRT is available
-        if TENSORRT_AVAILABLE:
-            backends.append("tensorrt_gpu")
-            print("TensorRT is available and will be tested")
-    
-    backends.append("pytorch_cpu")
-    
-    # Check if OpenVINO is available
+    """運行擴展的性能對比測試，包含 PyTorch, TensorRT, 和多種 OpenVINO 模式"""
+    print("\n=== Running Extended Performance Comparison ===")
+    print("Comparing: PyTorch CPU, TensorRT GPU (if available), and various OpenVINO modes...")
+
+    # --- Configuration ---
+    base_model_path = args.model
+    int8_model_dir = args.int8_model_dir # Get potential INT8 path from args
+    benchmark_runs_per_image = args.benchmark_runs
+
+    # --- Check INT8 Model Availability (similar logic as before) ---
+    int8_available = False
+    if not int8_model_dir:
+        base_pt_model_name = os.path.splitext(os.path.basename(args.model))[0] if args.model.endswith('.pt') else "yolov8n"
+        derived_int8_dir = args.model.replace('.pt', '_openvino_model') if args.model.endswith('.pt') else f'models/{base_pt_model_name}_openvino_model'
+        potential_int8_xml = os.path.join(derived_int8_dir, f"{base_pt_model_name}_int8.xml")
+        if os.path.exists(potential_int8_xml):
+             print(f"Found potential INT8 model for comparison at: {potential_int8_xml}")
+             int8_model_dir = derived_int8_dir # Use the found directory path
+             int8_available = True
+        elif os.path.isdir(derived_int8_dir) and derived_int8_dir.endswith("_int8_model") and os.path.exists(os.path.join(derived_int8_dir, f"{base_pt_model_name}.xml")):
+             print(f"Found potential INT8 model directory (by naming convention): {derived_int8_dir}")
+             int8_model_dir = derived_int8_dir
+             int8_available = True
+        else:
+             print("Info: INT8 model not found at default location or specified via --int8_model_dir. Skipping INT8 comparison.")
+    elif os.path.isdir(int8_model_dir) and any(f.endswith('.xml') for f in os.listdir(int8_model_dir)):
+        print(f"Using specified INT8 model directory for comparison: {int8_model_dir}")
+        int8_available = True
+    else:
+        print(f"Warning: Specified --int8_model_dir ('{int8_model_dir}') is invalid or empty. Skipping INT8 comparison.")
+
+    # --- Define All Modes to Compare ---
+    # Format: (Display Name, mode_arg, config_dict)
+    modes_to_compare = []
+
+    # 1. PyTorch CPU
+    modes_to_compare.append( ("PyTorch CPU", "pytorch_cpu", {}) )
+
+    # 2. TensorRT GPU (if available)
+    # Check globals for availability constants
+    global TENSORRT_AVAILABLE, OPENVINO_AVAILABLE
+    if TENSORRT_AVAILABLE and torch.cuda.is_available():
+        modes_to_compare.append( ("TensorRT GPU", "tensorrt_gpu", {}) )
+    else:
+        print("Info: TensorRT or CUDA not available. Skipping TensorRT GPU comparison.")
+
+    # 3. OpenVINO Modes (if available)
     if OPENVINO_AVAILABLE:
-        backends.append("openvino_cpu")
-        print("OpenVINO is available and will be tested")
-        
-    # Run benchmarks
+        modes_to_compare.append( ("OpenVINO FP32 Sync", "openvino_cpu", {"precision": "FP32", "use_async": False, "int8_model_dir": None}) )
+        modes_to_compare.append( ("OpenVINO FP16 Sync", "openvino_cpu", {"precision": "FP16", "use_async": False, "int8_model_dir": None}) )
+        modes_to_compare.append( ("OpenVINO FP32 Async", "openvino_cpu", {"precision": "FP32", "use_async": True, "int8_model_dir": None}) )
+        # Add FP16 Async here
+        modes_to_compare.append( ("OpenVINO FP16 Async", "openvino_cpu", {"precision": "FP16", "use_async": True, "int8_model_dir": None}) )
+        if int8_available:
+            modes_to_compare.append( ("OpenVINO INT8 Sync", "openvino_cpu", {"precision": "INT8", "use_async": False, "int8_model_dir": int8_model_dir}) )
+            modes_to_compare.append( ("OpenVINO INT8 Async", "openvino_cpu", {"precision": "INT8", "use_async": True, "int8_model_dir": int8_model_dir}) )
+    else:
+        print("Info: OpenVINO not available. Skipping OpenVINO comparison modes.")
+
+    if len(modes_to_compare) <= 1:
+        print("Error: Not enough modes available or configured for comparison.")
+        return {}
+
+    # --- Select Benchmark Image ---
+    # Use the first image found in test_images for this quick comparison
+    benchmark_image = None
+    if os.path.isdir("test_images"):
+        images = [f for f in os.listdir("test_images") if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        if images:
+            benchmark_image = os.path.join("test_images", images[0])
+            print(f"Using image '{images[0]}' for comparison benchmark.")
+        else:
+            print("Error: No images found in 'test_images' directory.")
+            return {}
+    else:
+        print("Error: 'test_images' directory not found.")
+        return {}
+
+    # --- Run Benchmarks ---
+    # Try to get versions, handle potential import errors if checked earlier
+    tensorrt_version = "N/A"
+    if TENSORRT_AVAILABLE:
+        try:
+            import tensorrt as trt
+            tensorrt_version = trt.__version__
+        except ImportError:
+            pass # Already marked as unavailable potentially
+    openvino_version = "N/A"
+    if OPENVINO_AVAILABLE:
+        try:
+            import openvino as ov
+            openvino_version = ov.__version__
+        except ImportError:
+            pass
+
     results = {
         "system_info": {
             "pytorch_version": torch.__version__,
             "cuda_available": torch.cuda.is_available(),
             "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A",
             "tensorrt_available": TENSORRT_AVAILABLE,
-            "openvino_available": OPENVINO_AVAILABLE
+            "tensorrt_version": tensorrt_version,
+            "openvino_available": OPENVINO_AVAILABLE,
+            "openvino_version": openvino_version
         },
-        "backends": {},
+        "benchmark_settings": {
+             "comparison_image": benchmark_image,
+             "runs_per_mode": benchmark_runs_per_image,
+             "int8_model_dir_used": int8_model_dir if int8_available else "N/A"
+        },
+        "backends": {}, # Keep 'backends' key for compatibility with existing plot func if needed, or rename later
         "fastest_backend": "",
         "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
-    # 獲取test_images目錄中的所有圖片
-    if os.path.isdir("test_images"):
-        images = [f for f in os.listdir("test_images") if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        if not images:
-            print("Error: 在test_images目錄中未找到圖片!")
-            return results
-            
-        # 如果沒有指定圖片，使用第一張作為基準測試圖片
-        benchmark_image = os.path.join("test_images", images[0])
-    else:
-        benchmark_image = args.image
-        
-    for backend in backends:
-        print(f"\n=== Testing {backend} ===")
-        # Create temporary args for this backend
+    # Make sure plotting is available
+    plotting_available = False
+    try:
+        import matplotlib.pyplot as plt
+        plotting_available = True
+    except ImportError:
+        print("Warning: matplotlib not found. Cannot generate plots for comparison.")
+
+
+    for display_name, mode_arg, config in modes_to_compare:
+        print(f"\n--- Testing Mode: {display_name} ---")
+        # Create temporary args for this specific mode run
         import copy
         temp_args = copy.deepcopy(args)
-        temp_args.mode = backend
-        temp_args.benchmark = True
-        temp_args.skip_convert = backend == "tensorrt_gpu"  # Skip TensorRT conversion for quick test
+        temp_args.mode = mode_arg
         temp_args.image = benchmark_image
-        
-        # Run with this backend
-        inference_time = run_inference(temp_args)
-        if inference_time:
-            results["backends"][backend] = {
-                "inference_time": inference_time,
-                "fps": 1000/inference_time
+        temp_args.benchmark = True # Enable internal benchmark runs
+        temp_args.benchmark_runs = benchmark_runs_per_image
+        temp_args.output = "" # Disable saving image during benchmark
+
+        # Apply specific configurations (precision, async, etc.)
+        temp_args.precision = config.get("precision", args.precision) # Default to FP32 if not set
+        temp_args.use_async = config.get("use_async", args.use_async) # Default to False
+        temp_args.int8_model_dir = config.get("int8_model_dir", args.int8_model_dir) # Pass INT8 dir if needed
+
+        # Special handling for TensorRT skip convert flag? (Maybe not needed here, run_inference handles it)
+        # temp_args.skip_convert = (mode_arg == "tensorrt_gpu")
+
+        # Run inference and get the average time
+        avg_time_ms = run_inference(temp_args)
+
+        if avg_time_ms is not None:
+            fps = 1000 / avg_time_ms if avg_time_ms > 0 else 0
+            print(f"  Mode '{display_name}' completed.")
+            print(f"  Average Inference Time: {avg_time_ms:.2f} ms")
+            print(f"  Average FPS: {fps:.2f}")
+            results["backends"][display_name] = {
+                "inference_time": avg_time_ms, # Use 'inference_time' key for compatibility with plotter
+                "fps": fps
             }
-            
-    # Print benchmark results
-    print("\n=== Performance Comparison ===")
-    if results["backends"]:
+        else:
+            print(f"  Mode '{display_name}' failed or skipped.")
+            results["backends"][display_name] = { "error": "Failed or skipped" }
+
+
+    # --- Process and Print Summary ---
+    valid_results = {k: v for k, v in results["backends"].items() if "inference_time" in v}
+
+    if valid_results:
         # Find fastest backend
-        fastest = min(results["backends"].items(), key=lambda x: x[1]["inference_time"])
-        fastest_backend = fastest[0]
+        fastest = min(valid_results.items(), key=lambda item: item[1]["inference_time"])
+        fastest_backend_name = fastest[0]
         fastest_time = fastest[1]["inference_time"]
-        results["fastest_backend"] = fastest_backend
-        
-        print("Backend            | Inference Time (ms) | FPS      | Speed Ratio")
-        print("-------------------|---------------------|----------|------------")
-        for backend, data in sorted(results["backends"].items(), key=lambda x: x[1]["inference_time"]):
+        results["fastest_backend"] = fastest_backend_name
+
+        # Add speed ratio
+        for backend_name, data in results["backends"].items():
+             if "inference_time" in data:
+                 data["speed_ratio"] = data["inference_time"] / fastest_time if fastest_time > 0 else float('inf')
+
+        print("\n=== Extended Performance Comparison Summary ===")
+        # Adjust column width if needed based on longest display name
+        # Calculate max length only from valid results keys
+        max_name_len = max(len(name) for name in valid_results.keys()) if valid_results else 27 # Default width
+        header = f"{'Mode'.ljust(max_name_len)} | Avg Time (ms) | Avg FPS   | Speed Ratio"
+        print(header)
+        print("-" * len(header))
+
+        # Sort by time for printing
+        for backend_name, data in sorted(valid_results.items(), key=lambda item: item[1]["inference_time"]):
             time = data["inference_time"]
-            ratio = time / fastest_time
-            results["backends"][backend]["speed_ratio"] = ratio
-            print(f"{backend.ljust(19)}| {time:.2f} ms           | {1000/time:.2f}   | {ratio:.2f}x")
-            
-        print(f"\nFastest backend: {fastest_backend} ({fastest_time:.2f} ms, {1000/fastest_time:.2f} FPS)")
+            fps = data["fps"]
+            ratio = data.get("speed_ratio", 1.0)
+            print(f"{backend_name.ljust(max_name_len)} | {time:^13.2f} | {fps:^9.2f} | {ratio:.2f}x")
+
+        print(f"\nFastest Mode: {fastest_backend_name} ({fastest_time:.2f} ms)")
+
+        # --- Plotting ---
+        if args.save_summary and plotting_available:
+             if 'plot_benchmark_results' in globals():
+                  timestamp = results.get("timestamp", datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
+                  # Use a specific title for this extended comparison
+                  plot_benchmark_results(results, args.benchmark_dir, timestamp, title_prefix="Extended Backend")
     else:
-        print("No benchmark results available")
+                  print("Warning: plot_benchmark_results function not found, skipping plot generation.")
+
+    # This else corresponds to 'if valid_results:'
+    else:
+        print("\nNo valid comparison results obtained.")
         
     return results
 
-def plot_benchmark_results(results, output_dir, timestamp):
+def plot_benchmark_results(results, output_dir, timestamp, title_prefix="Backend"):
     """Create benchmark results visualization"""
-    if not results["backends"]:
-        print("No data to plot")
+    # Import here to avoid hard dependency if plotting isn't used
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("Plotting requires matplotlib. Please install it (`pip install matplotlib`)")
         return
         
-    backends = []
+    # Use the key where mode results are stored ('modes' for the new func, 'backends' for old)
+    results_key = "modes" if "modes" in results else "backends"
+
+    if results_key not in results or not results[results_key]:
+        print(f"No data found under key '{results_key}' to plot")
+        return
+
+    mode_names = []
     times = []
     fps = []
     ratios = []
     
-    # Extract data
-    for backend, data in sorted(results["backends"].items(), key=lambda x: x[1]["inference_time"]):
-        backends.append(backend)
-        times.append(data["inference_time"])
-        fps.append(data["fps"])
-        ratios.append(data["speed_ratio"])
+    # Extract data, sorting by time
+    # Handle potential missing keys more gracefully
+    valid_modes = {}
+    time_key = None
+    fps_key = None
+    for k, v in results[results_key].items():
+         # Determine keys based on the first valid entry
+         if not time_key and "overall_avg_inference_time" in v:
+              time_key = "overall_avg_inference_time"
+              fps_key = "overall_avg_fps"
+         elif not time_key and "inference_time" in v:
+              time_key = "inference_time"
+              fps_key = "fps"
+
+         # Check if the determined keys exist in the current item
+         if time_key and time_key in v:
+              valid_modes[k] = v
+         else:
+              print(f"Skipping mode '{k}' due to missing time data ('{time_key}')")
+
+
+    if not valid_modes:
+         print("No valid data points found for plotting after checking keys.")
+         return
+    if not time_key or not fps_key:
+         print("Could not determine time/fps keys from results data.")
+         return
+
+
+    for mode_name, data in sorted(valid_modes.items(), key=lambda item: item[1][time_key]):
+        mode_names.append(mode_name)
+        times.append(data[time_key])
+        fps.append(data[fps_key])
+        # Use get() for speed_ratio as it might not exist if only one mode ran
+        ratios.append(data.get("speed_ratio", 1.0))
     
     # Create chart
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 15))
+    num_modes = len(mode_names)
+    # Adjust figure size based on number of modes to prevent overlap
+    fig_width = max(10, num_modes * 1.2)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(fig_width, 15), sharex=True) # Share x-axis
     
     # Inference time chart
-    ax1.bar(backends, times, color='blue')
-    ax1.set_title('Inference Time (ms)')
+    bars1 = ax1.bar(mode_names, times, color='skyblue')
+    ax1.set_title(f'{title_prefix} Comparison: Average Inference Time (ms)')
     ax1.set_ylabel('Milliseconds')
-    for i, v in enumerate(times):
-        ax1.text(i, v + 0.5, f"{v:.2f}", ha='center')
+    ax1.grid(axis='y', linestyle='--', alpha=0.7)
+    # Add values on bars
+    ax1.bar_label(bars1, fmt='%.2f', padding=3, fontsize=8)
     
     # FPS chart
-    ax2.bar(backends, fps, color='green')
-    ax2.set_title('Frames Per Second (FPS)')
+    bars2 = ax2.bar(mode_names, fps, color='lightgreen')
+    ax2.set_title(f'{title_prefix} Comparison: Average Frames Per Second (FPS)')
     ax2.set_ylabel('FPS')
-    for i, v in enumerate(fps):
-        ax2.text(i, v + 0.5, f"{v:.2f}", ha='center')
+    ax2.grid(axis='y', linestyle='--', alpha=0.7)
+    ax2.bar_label(bars2, fmt='%.2f', padding=3, fontsize=8)
     
     # Speed ratio chart
-    ax3.bar(backends, ratios, color='red')
-    ax3.set_title('Speed Ratio (relative to fastest backend)')
-    ax3.set_ylabel('Ratio')
-    for i, v in enumerate(ratios):
-        ax3.text(i, v + 0.05, f"{v:.2f}x", ha='center')
-    
-    plt.tight_layout()
+    bars3 = ax3.bar(mode_names, ratios, color='salmon')
+    ax3.set_title(f'{title_prefix} Comparison: Speed Ratio (relative to fastest)')
+    ax3.set_ylabel('Ratio (Lower is Faster)')
+    ax3.grid(axis='y', linestyle='--', alpha=0.7)
+    ax3.bar_label(bars3, fmt='%.2fx', padding=3, fontsize=8) # Add 'x' suffix
+
+    # Common settings for x-axis
+    plt.xticks(rotation=15, ha='right', fontsize=9) # Rotate labels slightly for better readability
+    plt.xlabel("Benchmark Mode")
+
+    fig.suptitle(f'{title_prefix} Performance Benchmark', fontsize=16, y=1.02) # Overall title
+    plt.tight_layout(rect=[0, 0.03, 1, 0.98]) # Adjust layout to prevent title overlap
     
     # Save chart
-    plot_filename = os.path.join(output_dir, f"benchmark_comparison_{timestamp}.png")
+    # Use a safe filename based on the prefix
+    safe_prefix = "".join(c if c.isalnum() else "_" for c in title_prefix).lower()
+    plot_filename = os.path.join(output_dir, f"{safe_prefix}_benchmark_comparison_{timestamp}.png")
+    try:
     plt.savefig(plot_filename)
     print(f"Benchmark plot saved to: {plot_filename}")
-    
-    # Close chart to free memory
-    plt.close()
+    except Exception as e:
+        print(f"Error saving plot: {e}")
+    finally:
+        # Close chart to free memory, should happen regardless of save success
+        plt.close(fig)
 
 def run_inference(args):
     """Run inference with benchmarking"""
@@ -592,9 +835,9 @@ def run_inference(args):
                     if args.benchmark:
                         print(f"Running inference {i+1}/{num_runs}...")
                         
-                    start_time = time.time()
+                    start_time = time.perf_counter() # Use perf_counter
                     results = model.predict(args.image, save=False, verbose=False)
-                    inference_time = (time.time() - start_time) * 1000
+                    inference_time = (time.perf_counter() - start_time) * 1000 # Use perf_counter
                     times.append(inference_time)
                     
                 # Calculate average and standard deviation
@@ -609,11 +852,21 @@ def run_inference(args):
                     print(f"Inference time: {avg_time:.2f} ms (FPS: {1000/avg_time:.2f})")
                     
                 # Process last result for visualization
-                detections = results[0].boxes.data.cpu().numpy()
-                
-                # Save result if not in benchmark mode
-                if not args.benchmark:
-                    run_visualization(args, original_image, detections)
+                # detections = results[0].boxes.data.cpu().numpy() # Incorrect if results is a list
+                if results: # Check if results list is not empty
+                    last_result_data = results[-1].boxes.data.cpu().numpy() # Get data from the LAST result object
+                else:
+                    print("Error: No results obtained from PyTorch model.")
+                    return None # Need to return None if no results
+
+                # Save result if output path is specified, regardless of benchmark flag
+                # REMOVE: if not args.benchmark:
+                if args.output: # Check if an output path IS provided
+                    print("Processing PyTorch output for visualization...")
+                    run_visualization(args, original_image, last_result_data)
+                else:
+                    # If no output path, just indicate completion for benchmark (or normal run without save)
+                    pass # Pass here if no output needed
                     
                 return avg_time
                 
@@ -683,10 +936,10 @@ def run_inference(args):
                             print(f"Running inference {i+1}/{num_runs}...")
                             
                         torch.cuda.synchronize()
-                        start_time = time.time()
+                        start_time = time.perf_counter() # Use perf_counter
                         results = model.predict(args.image, save=False, verbose=False)
                         torch.cuda.synchronize()
-                        inference_time = (time.time() - start_time) * 1000
+                        inference_time = (time.perf_counter() - start_time) * 1000 # Use perf_counter
                         times.append(inference_time)
                     
                     # Calculate average and standard deviation
@@ -700,12 +953,22 @@ def run_inference(args):
                     else:
                         print(f"Inference time: {avg_time:.2f} ms (FPS: {1000/avg_time:.2f})")
                     
-                    # Process results for visualization
-                    detections = results[0].boxes.data.cpu().numpy()
-                    
-                    # Save result if not in benchmark mode
-                    if not args.benchmark:
-                        run_visualization(args, original_image, detections)
+                    # Process results for visualization from the LAST run
+                    # detections = results[0].boxes.data.cpu().numpy() # Incorrect if results is a list
+                    if results:
+                        last_result_data = results[-1].boxes.data.cpu().numpy()
+                    else:
+                        print("Error: No results obtained from TensorRT model.")
+                        return None
+
+                    # Save result if output path is specified, regardless of benchmark flag
+                    # REMOVE: if not args.benchmark:
+                    if args.output: # Check if an output path IS provided
+                        print("Processing TensorRT output for visualization...")
+                        run_visualization(args, original_image, last_result_data)
+                    else:
+                        # If no output path, just indicate completion for benchmark
+                        pass # Pass here if no output needed
                     
                     return avg_time
                     
@@ -752,107 +1015,317 @@ def run_inference(args):
                     return None
                     
                 import openvino as ov
-                # Check for OpenVINO model
-                model_path = args.model.replace('.pt', '_openvino_model/yolov8n.xml')
-                if not os.path.exists(model_path):
-                    model_path = os.path.join("models", "yolov8n.xml")
-                    if not os.path.exists(model_path):
-                        print(f"OpenVINO model not found, trying to convert from PyTorch...")
-                        from ultralytics import YOLO
-                        pt_model = YOLO(args.model)
-                        pt_model.export(format="openvino")
-                        model_path = args.model.replace('.pt', '_openvino_model/yolov8n.xml')
-                        if not os.path.exists(model_path):
-                            print(f"Conversion failed, model not found at {model_path}")
+                core = ov.Core() # Initialize core earlier
+
+                # --- Determine Model Path based on Precision ---
+                openvino_model_xml = ""
+                is_int8 = (args.precision == 'INT8')
+
+                if is_int8:
+                    if args.int8_model_dir and os.path.isdir(args.int8_model_dir):
+                        # Look for a _int8.xml file first, then any .xml
+                        base_name = os.path.splitext(os.path.basename(args.model))[0] if args.model.endswith('.pt') else "yolov8n"
+                        int8_xml_path_specific = os.path.join(args.int8_model_dir, f"{base_name}_int8.xml")
+                        int8_xml_path_generic = os.path.join(args.int8_model_dir, f"{base_name}.xml") # NNCF might just name it like the original
+
+                        if os.path.exists(int8_xml_path_specific):
+                            openvino_model_xml = int8_xml_path_specific
+                            print(f"Found specific INT8 model: {openvino_model_xml}")
+                        elif os.path.exists(int8_xml_path_generic):
+                             openvino_model_xml = int8_xml_path_generic
+                             print(f"Found generic INT8 model in specified dir: {openvino_model_xml}")
+                        else:
+                             # Check for *any* xml file in the directory as a last resort
+                             from pathlib import Path # Import Path here
+                             xml_files_in_dir = list(Path(args.int8_model_dir).glob("*.xml"))
+                             if xml_files_in_dir:
+                                 openvino_model_xml = str(xml_files_in_dir[0])
+                                 print(f"Found an XML file in INT8 dir, assuming it's the INT8 model: {openvino_model_xml}")
+                             else:
+                                 print(f"Error: --precision INT8 specified, but no suitable .xml file found in --int8_model_dir: {args.int8_model_dir}")
                             return None
-                
-                # Initialize OpenVINO runtime
-                print(f"Loading OpenVINO model from: {model_path}")
-                core = ov.Core()
-                model = core.read_model(model_path)
-                compiled_model = core.compile_model(model, "CPU")
-                
-                # Get input information
-                try:
-                    h, w = 640, 640  # Default size
-                    try:
-                        input_shape = compiled_model.input(0).shape
-                        if len(input_shape) >= 4:
-                            h, w = input_shape[2], input_shape[3]
-                    except:
-                        print("Using default input shape: 640x640")
-                
-                    # Preprocess image
-                    preprocessed_image, _ = load_and_preprocess_image(args.image, size=(w, h))
-                    
-                    # Benchmark runs
-                    times = []
-                    num_runs = args.benchmark_runs if args.benchmark else 1
-                    
-                    for i in range(num_runs):
-                        if args.benchmark:
-                            print(f"Running inference {i+1}/{num_runs}...")
-                            
-                        start_time = time.time()
-                        outputs = compiled_model(preprocessed_image)
-                        inference_time = (time.time() - start_time) * 1000
-                        times.append(inference_time)
-                        
-                    # Calculate average and standard deviation
-                    avg_time = sum(times) / len(times)
-                    std_dev = (sum((t - avg_time) ** 2 for t in times) / len(times)) ** 0.5
-                    
-                    if args.benchmark:
-                        print(f"Average inference time: {avg_time:.2f} ms (FPS: {1000/avg_time:.2f})")
-                        print(f"Standard deviation: {std_dev:.2f} ms")
-                        print(f"Min: {min(times):.2f} ms, Max: {max(times):.2f} ms")
                     else:
-                        print(f"Inference time: {avg_time:.2f} ms (FPS: {1000/avg_time:.2f})")
-                    
-                    # Process last result for visualization using PyTorch for post-processing
-                    from ultralytics import YOLO
-                    pt_model = YOLO(args.model)
-                    results = pt_model.predict(args.image, verbose=False, save=False, show=False)
-                    
-                    # Extract detections
-                    detections = []
-                    for r in results:
-                        boxes = r.boxes
-                        for box in boxes:
-                            if box.conf.item() < args.threshold:
-                                continue
-                            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                            conf = float(box.conf)
-                            cls = int(box.cls)
-                            detections.append([x1, y1, x2, y2, conf, cls])
-                    
-                    detections = np.array(detections) if detections else np.zeros((0, 6))
-                    
-                    # Save result if not in benchmark mode
-                    if not args.benchmark:
+                        print(f"Error: --precision INT8 requires a valid --int8_model_dir.")
+                        return None
+                else: # FP32 or FP16 - use original logic to find/convert FP32 model
+                    # Use the existing logic to find FP32 model
+                    potential_paths = []
+                    if args.model.endswith('.xml'):
+                        potential_paths.append(args.model)
+                    elif args.model.endswith('.pt'):
+                         # Check 'models' first as per previous findings
+                         potential_paths.append(os.path.join("models", "yolov8n.xml"))
+                         potential_paths.append(args.model.replace('.pt', '_openvino_model/yolov8n.xml')) # Original logic path
+                         potential_paths.append(args.model.replace('.pt', '.xml'))
+                    else: # If args.model is not .pt or .xml, assume it might be a base name
+                         potential_paths.append(os.path.join("models", f"{args.model}.xml"))
+
+
+                    for path in potential_paths:
+                       if os.path.exists(path):
+                           openvino_model_xml = path
+                           print(f"Found base OpenVINO model (for {args.precision}) at: {openvino_model_xml}")
+                           break
+
+                    # If FP32 model was not found after checking potential paths, report error and exit
+                    if not openvino_model_xml:
+                        print(f"Error: OpenVINO model (.xml) for FP32/FP16 not found. Please ensure the model exists at one of the expected paths or provide the path directly.")
+                        print(f"Checked paths based on {args.model}: {potential_paths}")
+                        return None
+
+                # --- Model Loading --- (This part remains)
+                if not openvino_model_xml or not os.path.exists(openvino_model_xml):
+                     print(f"Error: Could not determine a valid OpenVINO model path to load for precision {args.precision}. Final path checked: {openvino_model_xml}")
+                     return None
+
+                print(f"Loading OpenVINO model ({args.precision}) from: {openvino_model_xml}")
+                try:
+                    model_ov = core.read_model(openvino_model_xml) # Use model_ov to avoid conflict
+                except Exception as read_e:
+                     print(f"Error reading OpenVINO model file {openvino_model_xml}: {read_e}")
+                     return None
+
+
+                # --- Get Input/Output Info ---
+                try:
+                    input_node = model_ov.input(0)
+                    output_node = model_ov.output(0) # Assuming single output for YOLOv8
+                    input_shape = tuple(input_node.shape) # e.g., (1, 3, 640, 640)
+                    input_h, input_w = input_shape[2], input_shape[3]
+                    print(f"Model expects input shape: {input_shape}")
+                except Exception as node_e:
+                     print(f"Warning: Could not get precise input/output node info: {node_e}. Using defaults.")
+                     input_h, input_w = 640, 640 # Fallback to default
+
+                # --- Configure Compilation ---
+                device = "CPU" # Currently hardcoded, could be made an arg
+                compile_config = {}
+                if args.precision == 'FP16' and not is_int8: # Apply FP16 hint only if not already INT8
+                    compile_config[ov.properties.hint.inference_precision()] = "f16"
+                    print("Set OpenVINO inference precision hint to FP16.")
+                elif is_int8:
+                     print("Using INT8 quantized model. No explicit precision hint needed during compilation.")
+                else: # FP32
+                     print("Using FP32 precision for OpenVINO.")
+
+
+                # --- Compile Model ---
+                print(f"Compiling model for {device} ({args.precision})...")
+                try:
+                    compiled_model = core.compile_model(model_ov, device, compile_config)
+                except Exception as compile_e:
+                     print(f"Error compiling OpenVINO model: {compile_e}")
+                     return None
+                print("Model compiled successfully.")
+
+                # --- Preprocess Image ---
+                # Use the determined input size (input_w, input_h)
+                preprocessed_image, _ = load_and_preprocess_image(args.image, size=(input_w, input_h))
+
+                # --- Inference Execution (Async/Sync Logic follows...) ---
+                # Correct indentation for num_runs
+                    num_runs = args.benchmark_runs if args.benchmark else 1
+                times = []
+                last_outputs = None # Reset last_outputs here
+                avg_time = 0
+                fps = 0
+
+                if args.use_async:
+                    # --- Asynchronous Inference ---
+                    print("Using Asynchronous Inference Pipeline")
+                    try:
+                        # Try getting optimal number of requests using the correct property name if possible
+                        # Ensure ov is imported before this point
+                        num_requests = compiled_model.get_property(ov.properties.hint.num_requests()) \
+                                        if ov.properties.hint.num_requests() in compiled_model.properties else 1
+                    except Exception:
+                         print("Could not get optimal number of infer requests, defaulting to 1.")
+                         num_requests = 1
+                    print(f"Using {num_requests} Infer Requests")
+                    infer_queue = ov.AsyncInferQueue(compiled_model, num_requests)
+
+                    # Store results using a list accessible by closure
+                    results_list = []
+                    completed_requests = 0
+                    # Make sure last_outputs (defined outside this if block) can be modified
+                    # No need for nonlocal if last_outputs is already in the outer scope
+
+                    # Define the callback *inside* this scope to capture results_list
+                    # Add *args to accept potential extra arguments from OpenVINO
+                    def callback_with_closure(request, *args):
+                        nonlocal completed_requests, last_outputs, results_list
+                        try:
+                            # Get the output tensor data directly
+                            output_data = request.get_output_tensor().data.copy()
+                            results_list.append(output_data)
+                            last_outputs = output_data # Keep track of the latest output
+                        except Exception as cb_e:
+                             print(f"Error inside async callback: {cb_e}")
+                        finally:
+                             completed_requests += 1
+
+                    # Set the callback, passing only the function itself
+                    try:
+                         infer_queue.set_callback(callback_with_closure)
+                    except Exception as set_cb_e:
+                         print(f"Error setting async callback: {set_cb_e}")
+                         return None # Cannot proceed without callback
+
+                    # Prepare input data dictionary
+                    try:
+                        input_tensor_name = model_ov.input(0).get_any_name()
+                    except Exception:
+                        print("Warning: Could not get input tensor name, using default key from compiled model inputs.")
+                        try:
+                             input_tensor_name = compiled_model.input(0).get_any_name() # Try compiled model input
+                        except Exception:
+                              print("Error: Failed to get input tensor name even from compiled model.")
+                              return None
+
+
+                    input_data = {input_tensor_name: preprocessed_image}
+
+                    print(f"Submitting {num_runs} inference requests asynchronously...")
+                    total_start_time = time.perf_counter() # Use perf_counter for total async time
+
+                    # Submit all runs
+                    successful_submissions = 0
+                    for i in range(num_runs):
+                        try:
+                            infer_queue.start_async(input_data)
+                            successful_submissions += 1
+                        except Exception as submit_e:
+                             print(f"Error submitting async request {i+1}/{num_runs}: {submit_e}")
+                             # Stop submitting further requests on error
+                             break
+
+                    # Wait for all *successfully submitted* requests to complete
+                    # Use number of successful submissions for waiting logic if needed,
+                    # but wait_all should handle jobs in flight correctly.
+                    if successful_submissions > 0:
+                         infer_queue.wait_all()
+                    else:
+                         print("No requests were submitted successfully.")
+
+                    total_end_time = time.perf_counter() # Use perf_counter for total async time
+                    total_time_async_ms = (total_end_time - total_start_time) * 1000
+
+                    # Check based on *successful* submissions vs completed runs
+                    if completed_requests != successful_submissions:
+                         print(f"Warning: Submitted {successful_submissions} requests, but only {completed_requests} completed.")
+                         if not results_list: # If no results at all, fail
+                              print("Error: No results obtained from async inference.")
+                              # It's possible avg_time is calculated but invalid, ensure return None
+                              return None
+
+                    # --- Performance Calculation for Async ---
+                    # Base calculation on successfully submitted requests
+                    avg_time = total_time_async_ms / successful_submissions if successful_submissions > 0 else 0
+                    fps = successful_submissions * 1000 / total_time_async_ms if total_time_async_ms > 0 else 0
+
+                    print("-" * 30)
+                    print(f"OpenVINO Async ({device}, {args.precision}, {successful_submissions}/{num_runs} runs submitted/requested):")
+                    print(f"  Total Time: {total_time_async_ms:.2f} ms")
+                    print(f"  Avg Time per inference (overlapped): {avg_time:.2f} ms")
+                    print(f"  Throughput (FPS): {fps:.2f}")
+                    print("-" * 30)
+
+                # Correctly indented else corresponding to 'if args.use_async:'
+                    else:
+                    # --- Synchronous Inference ---
+                    print(f"Using Synchronous Inference Pipeline ({device}, {args.precision})")
+                    try: # Add try-except around getting output node
+                        output_node_obj = compiled_model.output(0)
+                    except Exception as out_node_e:
+                        print(f"Error getting output node: {out_node_e}")
+                        return None
+
+                    print(f"Running {num_runs} inference(s)...")
+                    for i in range(num_runs):
+                        start_time = time.perf_counter() # Use perf_counter
+                        try: # Add try-except around inference call
+                             outputs_dict = compiled_model(preprocessed_image)
+                             inference_time = (time.perf_counter() - start_time) * 1000 # Use perf_counter
+                             times.append(inference_time)
+                             last_outputs = outputs_dict[output_node_obj] # Use the node object as key
+                        except Exception as infer_e:
+                              print(f"Error during synchronous inference run {i+1}: {infer_e}")
+                              # Decide whether to stop or continue
+                              return None # Stop on error for sync
+
+                    # --- Calculate Performance Metrics for Sync --- (Remains same)
+                    avg_time = np.mean(times) if times else 0
+                    std_dev = np.std(times) if len(times) > 1 else 0
+                    min_time = np.min(times) if times else 0
+                    max_time = np.max(times) if times else 0
+                    fps = 1000 / avg_time if avg_time > 0 else 0
+
+                    print("-" * 30)
+                    if args.benchmark and num_runs > 1:
+                        print(f"OpenVINO Sync Benchmark ({device}, {args.precision}, {num_runs} runs):")
+                        print(f"  Avg Time: {avg_time:.2f} ms")
+                        print(f"  Std Dev:  {std_dev:.2f} ms")
+                        print(f"  Min Time: {min_time:.2f} ms")
+                        print(f"  Max Time: {max_time:.2f} ms")
+                        print(f"  Avg FPS:  {fps:.2f}")
+                    else:
+                        print(f"OpenVINO Sync Inference Time ({device}, {args.precision}): {avg_time:.2f} ms")
+                        print(f"OpenVINO Sync FPS ({device}, {args.precision}): {fps:.2f}")
+                    print("-" * 30)
+
+                # --- Process Last Result for Visualization (Common path for sync/async) ---
+                if last_outputs is not None:
+                    # Need original image shape here for processing
+                    orig_h, orig_w = original_image.shape[:2]
+
+                    if args.output: # Only process and visualize if output path is given
+                        print("Processing OpenVINO output for visualization...")
+                        # Call the new processing function
+                        detections = process_openvino_output(
+                            last_outputs,
+                            original_shape=(orig_h, orig_w),
+                            input_shape=(input_h, input_w),
+                            conf_threshold=args.threshold
+                        )
+                        # Check if detections were successfully processed
+                        if detections is not None and detections.shape[0] > 0:
+                             print(f"Found {detections.shape[0]} detections after NMS.")
                         run_visualization(args, original_image, detections)
-                        
-                    return avg_time
-                    
-                except Exception as e:
-                    print(f"Error with OpenVINO inference: {e}")
+                        elif detections is not None: # Correct indentation
+                             print("No detections found meeting criteria after NMS.")
+                             # Optionally, save the image without boxes or skip saving
+                             run_visualization(args, original_image, detections) # Pass empty detections
+                        else: # Correct indentation
+                             print("Error occurred during OpenVINO output processing, skipping visualization.")
+                    else:
+                         # If no output path, just indicate completion for benchmark
+                         pass # Ensure pass is here and correctly indented
+
+                    return avg_time # Return performance metric outside the if args.output block
+
+                else:
+                    print("Error: No output received from OpenVINO model after inference.")
+                    return None
+
+            except ImportError as ie:
+                 print(f"Import error during OpenVINO processing: {ie}. Ensure OpenVINO and necessary components are installed correctly.")
+                 # Correct indentation for traceback
                     import traceback
                     traceback.print_exc()
                     return None
-                    
             except Exception as e:
-                print(f"Error with OpenVINO model: {e}")
+                print(f"Error during OpenVINO configuration, inference, or post-processing: {e}")
                 import traceback
                 traceback.print_exc()
                 return None
                 
     except Exception as e:
-        print(f"Error setting up model: {e}")
+        print(f"General error setting up or running model: {e}")
         import traceback
         traceback.print_exc()
         return None
         
-    return None
+    return None # Should return avg_time from the successful block
 
 def run_visualization(args, original_image, detections):
     """Visualize and save detection results"""
@@ -872,13 +1345,7 @@ def run_visualization(args, original_image, detections):
     
     # Process output path
     output_path = args.output
-    # If output path is a directory, generate filename in that directory
-    if os.path.isdir(output_path):
-        # Get filename from input image path
-        input_filename = os.path.basename(args.image)
-        base_name, _ = os.path.splitext(input_filename)
-        output_path = os.path.join(output_path, f"{base_name}_{args.mode}.jpg")
-    # Ensure output directory exists
+    # Ensure output directory exists (This part is correct and sufficient)
     output_dir = os.path.dirname(output_path)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
@@ -947,6 +1414,1066 @@ def run_visualization(args, original_image, detections):
 def run_single_inference(args):
     """Run a single inference without benchmarking"""
     run_inference(args)
+
+def run_openvino_benchmark(args):
+    """Runs a detailed benchmark comparing OpenVINO modes."""
+    print("\n=== Running Detailed OpenVINO Benchmark ===")
+
+    # --- Configuration ---
+    base_model_path = args.model # Usually the .pt or base .xml path
+    int8_model_dir = args.int8_model_dir
+    benchmark_runs_per_image = args.benchmark_runs # Runs inside run_inference
+
+    # --- Find Test Images ---
+    if not os.path.isdir("test_images"):
+        print("Error: 'test_images' directory not found.")
+        return {}
+    image_files = [f for f in os.listdir("test_images") if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    if not image_files:
+        print("Error: No images found in 'test_images' directory.")
+        return {}
+    num_total_images = len(image_files)
+    print(f"Found {num_total_images} images for benchmarking.")
+
+    # --- Check INT8 Model Availability ---
+    int8_available = False
+    if not int8_model_dir:
+        # Try to derive a default path if not provided
+        base_pt_model_name = os.path.splitext(os.path.basename(args.model))[0] if args.model.endswith('.pt') else "yolov8n"
+        # Adjust derived path slightly to match typical ultralytics export structure better
+        derived_int8_dir = args.model.replace('.pt', '_openvino_model') if args.model.endswith('.pt') else f'models/{base_pt_model_name}_openvino_model'
+        # Look for a file like yolov8n_int8.xml OR just yolov8n.xml within a subdir that implies INT8
+        potential_int8_xml = os.path.join(derived_int8_dir, f"{base_pt_model_name}_int8.xml")
+        if os.path.exists(potential_int8_xml):
+             print(f"Found potential INT8 model at: {potential_int8_xml}")
+             # Need the directory containing the XML for run_inference logic
+             int8_model_dir = derived_int8_dir # Set the dir path
+             int8_available = True
+        elif os.path.isdir(derived_int8_dir) and os.path.exists(os.path.join(derived_int8_dir, f"{base_pt_model_name}.xml")):
+             # Check if the directory *name* implies INT8, e.g., ends with _int8_model
+             if derived_int8_dir.endswith("_int8_model"):
+                  print(f"Found potential INT8 model directory (by naming convention): {derived_int8_dir}")
+                  int8_model_dir = derived_int8_dir
+                  int8_available = True
+             else:
+                  print("Warning: --int8_model_dir not specified and default path checking did not conclusively find an INT8 model. Skipping INT8 tests.")
+        else:
+             print("Warning: --int8_model_dir not specified and default path checking did not find an INT8 model. Skipping INT8 tests.")
+
+    elif os.path.isdir(int8_model_dir):
+         # Check if at least one XML file exists within the specified directory
+         if any(f.endswith('.xml') for f in os.listdir(int8_model_dir)):
+              print(f"Using specified INT8 model directory: {int8_model_dir}")
+              int8_available = True
+         else:
+              print(f"Warning: Specified --int8_model_dir ('{int8_model_dir}') contains no .xml file. Skipping INT8 tests.")
+    else:
+        print(f"Warning: Specified --int8_model_dir ('{int8_model_dir}') is not a valid directory. Skipping INT8 tests.")
+
+    # --- Define Benchmark Modes ---
+    # Format: (Name, Precision, Use Async, INT8 Dir (if needed))
+    modes_to_run = [
+        ("OpenVINO FP32 Sync", "FP32", False, None),
+        ("OpenVINO FP16 Sync", "FP16", False, None), # FP16 hint effectiveness depends on hardware
+        *([("OpenVINO INT8 Sync", "INT8", False, int8_model_dir)] if int8_available else []),
+        ("OpenVINO FP32 Async", "FP32", True, None),
+        *([("OpenVINO INT8 Async", "INT8", True, int8_model_dir)] if int8_available else []),
+        # Add FP16 Async? Less common benefit unless on specific hardware like VPU, but can include.
+        # ("OpenVINO FP16 Async", "FP16", True, None),
+    ]
+
+    if not OPENVINO_AVAILABLE:
+         print("Error: OpenVINO is not available. Cannot run OpenVINO benchmarks.")
+         return {}
+
+    if not modes_to_run:
+        print("Error: No valid OpenVINO benchmark modes configured (or OpenVINO not available).")
+        return {}
+
+    # --- Run Benchmarks ---
+    # Use system info from args if available, or generate here
+    system_info = {
+            "pytorch_version": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A",
+            "tensorrt_available": TENSORRT_AVAILABLE,
+            "openvino_available": OPENVINO_AVAILABLE,
+            "openvino_version": ov.__version__ if OPENVINO_AVAILABLE else "N/A"
+    }
+
+    results = {
+        "system_info": system_info,
+        "benchmark_settings": {
+             "base_model": base_model_path,
+             "images_tested": num_total_images,
+             "runs_per_image": benchmark_runs_per_image,
+             "int8_model_dir_used": int8_model_dir if int8_available else "N/A"
+        },
+        "modes": {}, # Store aggregated results per mode
+        "fastest_mode": "",
+        "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+    # Make sure the plot function dependency (matplotlib) is handled
+    try:
+        import matplotlib.pyplot as plt
+        plotting_available = True
+    except ImportError:
+        print("Warning: matplotlib not found. Cannot generate plots.")
+        plotting_available = False
+
+
+    for mode_name, precision, use_async, specific_int8_dir in modes_to_run:
+        print(f"\n--- Benchmarking Mode: {mode_name} ---")
+        all_image_times = []
+        images_processed_count = 0
+
+        for i, img_file in enumerate(image_files):
+            img_path = os.path.join("test_images", img_file)
+            print(f"  Processing image {i+1}/{num_total_images}: {img_file} ({precision}, {'Async' if use_async else 'Sync'})")
+
+            # Create temporary args for this specific run
+            import copy
+            temp_args = copy.deepcopy(args)
+            temp_args.mode = "openvino_cpu" # Force OpenVINO mode
+            temp_args.image = img_path
+            temp_args.precision = precision
+            temp_args.use_async = use_async
+            temp_args.int8_model_dir = specific_int8_dir # Use the correct INT8 dir for this mode
+            temp_args.model = base_model_path # Ensure base model path is consistent
+            temp_args.benchmark = True # Enable internal benchmark runs
+            temp_args.benchmark_runs = benchmark_runs_per_image
+            # Disable saving individual images during benchmark by providing empty output path
+            temp_args.output = "" # run_visualization checks for non-empty path
+
+            # Run inference and get the average time for this image
+            # Ensure run_inference is robust and returns None on failure
+            avg_time_ms = run_inference(temp_args)
+
+            if avg_time_ms is not None:
+                all_image_times.append(avg_time_ms)
+                images_processed_count += 1
+                # Reduce verbosity slightly inside the loop
+                # print(f"    Avg time for this image: {avg_time_ms:.2f} ms")
+            else:
+                print(f"    Skipped image {img_file} due to error in inference for mode {mode_name}.")
+
+        # --- Aggregate Results for this Mode ---
+        if images_processed_count > 0:
+            overall_avg_time = sum(all_image_times) / images_processed_count
+            # Calculate FPS based on overall average time
+            overall_fps = 1000 / overall_avg_time if overall_avg_time > 0 else 0
+            print(f"  Mode '{mode_name}' completed.")
+            print(f"  Images successfully processed: {images_processed_count}/{num_total_images}")
+            print(f"  Overall Average Inference Time: {overall_avg_time:.2f} ms")
+            print(f"  Overall Average FPS: {overall_fps:.2f}")
+
+            results["modes"][mode_name] = {
+                "overall_avg_inference_time": overall_avg_time,
+                "overall_avg_fps": overall_fps,
+                "images_processed": images_processed_count
+                # Add precision and async flag for clarity in results dict?
+                # "precision": precision,
+                # "async": use_async
+            }
+        else:
+            print(f"  Mode '{mode_name}' failed to process any images.")
+            results["modes"][mode_name] = { "error": "Failed to process any images" }
+
+
+    # --- Determine Fastest Mode ---
+    if results["modes"]:
+        valid_modes = {k: v for k, v in results["modes"].items() if "overall_avg_inference_time" in v}
+        if valid_modes:
+            fastest = min(valid_modes.items(), key=lambda item: item[1]["overall_avg_inference_time"])
+            fastest_mode_name = fastest[0]
+            fastest_time = fastest[1]["overall_avg_inference_time"]
+            results["fastest_mode"] = fastest_mode_name
+
+            # Add speed ratio relative to fastest
+            for mode_name, data in results["modes"].items():
+                 if "overall_avg_inference_time" in data:
+                     # Ensure fastest_time is not zero to avoid division error
+                     data["speed_ratio"] = data["overall_avg_inference_time"] / fastest_time if fastest_time > 0 else float('inf')
+
+            print("\n=== OpenVINO Benchmark Summary ===")
+            print("Mode                        | Avg Time (ms) | Avg FPS   | Speed Ratio")
+            print("----------------------------|---------------|-----------|------------")
+            # Sort by time for printing
+            for mode_name, data in sorted(valid_modes.items(), key=lambda item: item[1]["overall_avg_inference_time"]):
+                time = data["overall_avg_inference_time"]
+                fps = data["overall_avg_fps"]
+                ratio = data.get("speed_ratio", 1.0)
+                print(f"{mode_name.ljust(27)}| {time:^13.2f} | {fps:^9.2f} | {ratio:.2f}x")
+            print(f"\nFastest Mode: {fastest_mode_name} ({fastest_time:.2f} ms)")
+
+            # Add plotting call here, inside the check for valid modes and plotting availability
+            if args.save_summary and plotting_available:
+                 if 'plot_benchmark_results' in globals():
+                      timestamp = results.get("timestamp", datetime.datetime.now().strftime('%Y%m%d_%H%M%S')) # Get timestamp from results
+                      # Use a specific title for this extended comparison
+                      plot_benchmark_results(results, args.benchmark_dir, timestamp, title_prefix="OpenVINO")
+                 else:
+                      print("Warning: plot_benchmark_results function not found, skipping plot generation.")
+
+
+        else:
+             print("\nNo valid benchmark results obtained.")
+    else:
+        print("\nNo benchmark modes were run or completed successfully.")
+
+    return results
+
+# <<< Add this new function definition somewhere before the main() function >>>
+
+def run_all_images_all_modes(args):
+    """
+    Runs inference on all images in test_images for all available backend modes,
+    saves visualization results, and calculates average performance per mode.
+    """
+    print("\\n=== Running All Images Through All Modes ===")
+
+    # --- Configuration & Setup ---
+    base_model_path = args.model
+    int8_model_dir = args.int8_model_dir
+    benchmark_runs_per_image = args.benchmark_runs # Use benchmark runs for stable timing per image
+    # Import Path from pathlib here
+    from pathlib import Path
+    results_base_dir = Path(args.results_dir)
+    results_base_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Find Test Images ---
+    test_images_dir = Path("test_images")
+    if not test_images_dir.is_dir():
+        print(f"Error: 'test_images' directory not found at {test_images_dir}")
+        return
+    image_files = sorted(list(test_images_dir.glob("*.jpg")) + \
+                         list(test_images_dir.glob("*.jpeg")) + \
+                         list(test_images_dir.glob("*.png")))
+    if not image_files:
+        print(f"Error: No images found in '{test_images_dir}' directory.")
+        return
+    num_total_images = len(image_files)
+    print(f"Found {num_total_images} images in {test_images_dir}.")
+
+    # --- Check INT8 Model Availability ---
+    # (Reuse the logic from run_benchmark_comparison or run_openvino_benchmark)
+    int8_available = False
+    if not int8_model_dir:
+        base_pt_model_name = os.path.splitext(os.path.basename(args.model))[0] if args.model.endswith('.pt') else "yolov8n"
+        derived_int8_dir = Path(f"yolov8n_openvino_model_int8") # Path where NNCF saved it
+        # Check if the default NNCF output exists
+        if derived_int8_dir.is_dir() and any(f.endswith('.xml') for f in os.listdir(derived_int8_dir)):
+             print(f"Found potential INT8 model directory at: {derived_int8_dir}")
+             int8_model_dir = str(derived_int8_dir) # Use the found directory path string
+             int8_available = True
+        else:
+             print("Info: INT8 model directory not specified and not found at default location ./yolov8n_openvino_model_int8. Skipping INT8 modes.")
+    elif os.path.isdir(int8_model_dir) and any(f.endswith('.xml') for f in os.listdir(int8_model_dir)):
+        print(f"Using specified INT8 model directory: {int8_model_dir}")
+        int8_available = True
+    else:
+        print(f"Warning: Specified --int8_model_dir ('{int8_model_dir}') is invalid or empty. Skipping INT8 modes.")
+        int8_model_dir = None # Ensure it's None if invalid
+
+
+    # --- Define All Modes To Run ---
+    # (Similar to run_benchmark_comparison)
+    # Make sure these are accessible if defined globally
+    global TENSORRT_AVAILABLE, OPENVINO_AVAILABLE, torch, ov
+    modes_to_run = []
+    modes_to_run.append( ("PyTorch_CPU", "pytorch_cpu", {}) )
+    if TENSORRT_AVAILABLE and torch.cuda.is_available():
+        modes_to_run.append( ("TensorRT_GPU", "tensorrt_gpu", {}) )
+    if OPENVINO_AVAILABLE:
+        modes_to_run.append( ("OpenVINO_FP32_Sync", "openvino_cpu", {"precision": "FP32", "use_async": False, "int8_model_dir": None}) )
+        modes_to_run.append( ("OpenVINO_FP16_Sync", "openvino_cpu", {"precision": "FP16", "use_async": False, "int8_model_dir": None}) )
+        modes_to_run.append( ("OpenVINO_FP32_Async", "openvino_cpu", {"precision": "FP32", "use_async": True, "int8_model_dir": None}) )
+        modes_to_run.append( ("OpenVINO_FP16_Async", "openvino_cpu", {"precision": "FP16", "use_async": True, "int8_model_dir": None}) )
+        if int8_available:
+            modes_to_run.append( ("OpenVINO_INT8_Sync", "openvino_cpu", {"precision": "INT8", "use_async": False, "int8_model_dir": int8_model_dir}) )
+            modes_to_run.append( ("OpenVINO_INT8_Async", "openvino_cpu", {"precision": "INT8", "use_async": True, "int8_model_dir": int8_model_dir}) )
+
+    if not modes_to_run:
+        print("Error: No backend modes available to run.")
+        return
+
+    # --- Store aggregated results ---
+    aggregated_results = {}
+
+    # --- Iterate through Modes and Images ---
+    for display_name, mode_arg, config in modes_to_run:
+        print(f"\\n--- Processing Mode: {display_name} ---")
+        # Create a safe directory name
+        safe_display_name = display_name.replace(" ", "_").replace("/", "_")
+        mode_results_dir = results_base_dir / safe_display_name
+        mode_results_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Saving results to: {mode_results_dir}")
+
+        mode_total_time_ms = 0
+        mode_successful_images = 0
+        mode_all_image_times = []
+
+        for i, img_path in enumerate(image_files):
+            print(f"  Processing image {i+1}/{num_total_images}: {img_path.name}")
+
+            # Prepare args for this specific image and mode
+            import copy
+            temp_args = copy.deepcopy(args)
+            temp_args.mode = mode_arg
+            temp_args.image = str(img_path)
+            temp_args.benchmark = True # Use benchmark runs for stable time
+            temp_args.benchmark_runs = benchmark_runs_per_image
+            temp_args.model = base_model_path
+
+            # Apply specific configurations
+            temp_args.precision = config.get("precision", args.precision)
+            temp_args.use_async = config.get("use_async", args.use_async)
+            temp_args.int8_model_dir = config.get("int8_model_dir", args.int8_model_dir)
+
+            # Define the output path for the visualization image for this mode/image
+            output_filename = f"{img_path.stem}_{safe_display_name}{img_path.suffix}"
+            temp_args.output = str(mode_results_dir / output_filename)
+
+            # Run inference for this image
+            # run_inference will now save the image because temp_args.output is set
+            avg_time_ms = run_inference(temp_args)
+
+            if avg_time_ms is not None and avg_time_ms > 0: # Check for valid positive time
+                mode_total_time_ms += avg_time_ms
+                mode_successful_images += 1
+                mode_all_image_times.append(avg_time_ms)
+                print(f"    Avg time for this image: {avg_time_ms:.2f} ms")
+            else:
+                print(f"    Skipped image {img_path.name} for mode {display_name} due to error or invalid time.")
+
+        # --- Calculate and Store Aggregated Results for this Mode ---
+        if mode_successful_images > 0:
+            overall_avg_time = mode_total_time_ms / mode_successful_images
+            # Calculate FPS based on overall average time
+            overall_fps = 1000 / overall_avg_time if overall_avg_time > 0 else 0
+            aggregated_results[display_name] = {
+                "overall_avg_time": overall_avg_time,
+                "overall_fps": overall_fps,
+                "successful_images": mode_successful_images,
+                "total_images": num_total_images
+            }
+            print(f"  Mode '{display_name}' completed.")
+            print(f"  Successfully processed: {mode_successful_images}/{num_total_images} images")
+            print(f"  Overall Average Inference Time: {overall_avg_time:.2f} ms")
+            print(f"  Overall Average FPS: {overall_fps:.2f}")
+        else:
+            print(f"  Mode '{display_name}' failed to process any images.")
+            aggregated_results[display_name] = {"error": "Failed to process any images"}
+
+    # --- Print Final Summary Table ---
+    print("\\n=== Overall Average Performance Across All Images ===")
+    valid_results = {k: v for k, v in aggregated_results.items() if "overall_avg_time" in v and v["overall_avg_time"] > 0}
+
+    if valid_results:
+        # Sort by overall average time
+        sorted_results = sorted(valid_results.items(), key=lambda item: item[1]["overall_avg_time"])
+
+        # Find fastest for ratio calculation
+        fastest_time = sorted_results[0][1]["overall_avg_time"] if sorted_results else 1
+
+        # Determine max name length for formatting
+        max_name_len = max(len(name) for name in valid_results.keys()) if valid_results else 27
+
+        header = f"{'Mode'.ljust(max_name_len)} | Avg Time (ms) | Avg FPS   | Speed Ratio | Processed"
+        print(header)
+        print("-" * len(header))
+
+        for mode_name, data in sorted_results:
+            time = data["overall_avg_time"]
+            fps = data["overall_fps"]
+            ratio = time / fastest_time if fastest_time > 0 else float('inf')
+            processed_str = f"{data['successful_images']}/{data['total_images']}"
+            print(f"{mode_name.ljust(max_name_len)} | {time:^13.2f} | {fps:^9.2f} | {ratio:^11.2f}x | {processed_str}")
+
+        print(f"\\nFastest Mode (Overall Avg): {sorted_results[0][0]} ({fastest_time:.2f} ms)")
+    else:
+        print("No valid results obtained across all modes.")
+
+    # --- Plotting --- # Add plotting logic here
+    if valid_results and args.save_summary: # Check if save_summary is enabled (optional, could plot always)
+        print("\nGenerating comparison plot...")
+        # Ensure plotting function is available
+        if 'plot_benchmark_results' in globals():
+            # Prepare results in the format expected by plot_benchmark_results
+            # It expects results under a key like 'modes' or 'backends'
+            plot_data = {
+                # Include system info and settings if needed by plotter, or keep it simple
+                "system_info": { # Populate if necessary, or omit
+                      "pytorch_version": torch.__version__,
+                      "cuda_available": torch.cuda.is_available(),
+                      "tensorrt_available": TENSORRT_AVAILABLE,
+                      "openvino_available": OPENVINO_AVAILABLE
+                 },
+                "benchmark_settings": { # Populate if necessary, or omit
+                     "images_tested": num_total_images,
+                     "runs_per_image": benchmark_runs_per_image
+                },
+                # The actual results data, using 'modes' as the key
+                # Map keys from aggregated_results to match expected keys ('inference_time', 'fps')
+                "modes": {k: {"inference_time": v["overall_avg_time"],
+                              "fps": v["overall_fps"],
+                              "speed_ratio": v["overall_avg_time"] / fastest_time if fastest_time > 0 else float('inf')
+                              }
+                          for k, v in valid_results.items()
+                         }
+            }
+
+            # Generate timestamp
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+
+            # Call the plotting function
+            plot_benchmark_results(
+                plot_data, # Pass the formatted data
+                args.benchmark_dir, # Use benchmark_dir for plots
+                timestamp,
+                title_prefix="All Images All Modes" # Specific title
+            )
+        else:
+            print("Warning: plot_benchmark_results function not found, skipping plot generation.")
+
+    print("\\n--- All Images All Modes Test Complete ---")
+
+# <<< End of run_all_images_all_modes function definition >>>
+
+# <<< Add this function definition before run_inference >>>
+def process_openvino_output(output_data, original_shape, input_shape, conf_threshold, nms_threshold=0.45):
+    """
+    Processes the raw output from an OpenVINO YOLOv8 model.
+
+    Args:
+        output_data: Raw numpy array output from the OpenVINO model (e.g., shape [1, 84, 8400]).
+        original_shape: Tuple (height, width) of the original image.
+        input_shape: Tuple (height, width) the model expects.
+        conf_threshold: Confidence threshold for filtering detections.
+        nms_threshold: IoU threshold for Non-Maximum Suppression.
+
+    Returns:
+        A numpy array of final detections in the format [x1, y1, x2, y2, confidence, class_id].
+    """
+    try:
+        print(f"OpenVINO raw output shape: {output_data.shape}") # Debug print
+
+        # Expected output shape: [1, 84, 8400] -> [batch, cxcywh+classes, num_proposals]
+        # Transpose to [1, 8400, 84] -> [batch, num_proposals, cxcywh+classes]
+        if len(output_data.shape) == 3 and output_data.shape[1] == 84 and output_data.shape[2] == 8400:
+             output_data = output_data.transpose((0, 2, 1))[0] # Remove batch dim
+        elif len(output_data.shape) == 2 and output_data.shape[1] == 84:
+             # Assume shape [8400, 84] if batch dim already removed
+             pass # Already in the correct shape [num_proposals, cxcywh+classes]
+        else:
+             print(f"Warning: Unexpected OpenVINO output shape {output_data.shape}. Attempting to proceed, but results may be incorrect.")
+             # Attempt to remove batch dim if it exists
+             if len(output_data.shape) == 3 and output_data.shape[0] == 1:
+                  output_data = output_data[0]
+             # If still not 2D, cannot proceed reliably
+             if len(output_data.shape) != 2:
+                  raise ValueError(f"Cannot process unexpected output shape: {output_data.shape}")
+
+
+        boxes = []
+        scores = []
+        class_ids = []
+
+        orig_h, orig_w = original_shape
+        input_h, input_w = input_shape
+
+        # Calculate scaling factors
+        x_scale = orig_w / input_w
+        y_scale = orig_h / input_h
+
+        num_proposals = output_data.shape[0]
+        print(f"Processing {num_proposals} proposals...")
+
+        for i in range(num_proposals):
+            proposal = output_data[i]
+            # First 4 are box coordinates (cx, cy, w, h) relative to input size
+            # Next 80 are class scores (assuming COCO dataset)
+            # Often, there isn't a separate object confidence score in this format,
+            # the class scores themselves represent confidence.
+
+            class_scores = proposal[4:] # Scores for 80 classes
+            class_id = np.argmax(class_scores)
+            confidence = class_scores[class_id]
+
+            if confidence >= conf_threshold:
+                # Decode box coordinates
+                cx, cy, w_box, h_box = proposal[:4]
+
+                # Convert center coords, width, height to x1, y1, x2, y2 (relative to input)
+                x1_rel = cx - w_box / 2
+                y1_rel = cy - h_box / 2
+                # x2_rel = cx + w_box / 2
+                # y2_rel = cy + h_box / 2
+
+                # Scale to original image dimensions for NMS input format [x_tl, y_tl, width, height]
+                x_tl_scaled = int(x1_rel * x_scale)
+                y_tl_scaled = int(y1_rel * y_scale)
+                w_scaled = int(w_box * x_scale)
+                h_scaled = int(h_box * y_scale)
+
+
+                boxes.append([x_tl_scaled, y_tl_scaled, w_scaled, h_scaled]) # Store as [x_top_left, y_top_left, width, height] for NMS
+                scores.append(float(confidence))
+                class_ids.append(int(class_id))
+
+        if not boxes:
+             print("No boxes found above confidence threshold before NMS.")
+             return np.empty((0, 6), dtype=np.float32) # Return empty array if nothing found
+
+
+        print(f"Found {len(boxes)} boxes above threshold before NMS.")
+        # Perform Non-Maximum Suppression
+        # cv2.dnn.NMSBoxes expects boxes as (x, y, w, h)
+        try:
+             # Ensure boxes, scores are correctly formatted
+             # boxes should be list of [x, y, w, h]
+             # scores should be list of floats
+             indices = cv2.dnn.NMSBoxes(boxes, scores, score_threshold=conf_threshold, nms_threshold=nms_threshold)
+        except Exception as nms_e:
+             print(f"Error during NMS: {nms_e}")
+             # Fallback: Return boxes without NMS? Or empty? Let's return empty for safety.
+             return np.empty((0, 6), dtype=np.float32)
+
+        final_detections = []
+        if len(indices) > 0:
+             print(f"Keeping {len(indices)} boxes after NMS.")
+             # If indices is a nested array (e.g., [[0], [2]]), flatten it
+             if isinstance(indices, np.ndarray) and len(indices.shape) > 1 and indices.shape[1] == 1:
+                  indices = indices.flatten()
+             # Handle potential tuple output from NMSBoxes in some versions?
+             elif isinstance(indices, tuple) and len(indices) > 0:
+                  indices = indices[0].flatten() if isinstance(indices[0], (list, np.ndarray)) else indices
+
+             # Check indices type after potential flattening
+             if not isinstance(indices, (np.ndarray, list, tuple)):
+                  print(f"Warning: Unexpected indices type after NMS processing: {type(indices)}. Cannot proceed.")
+                  return np.empty((0, 6), dtype=np.float32)
+
+             # Ensure indices are integers
+             try:
+                 valid_indices = [int(i) for i in indices if int(i) < len(boxes)]
+             except (ValueError, TypeError) as e:
+                 print(f"Error converting NMS indices to integers: {e}. Indices: {indices}")
+                 return np.empty((0, 6), dtype=np.float32)
+
+
+             for i in valid_indices:
+                x, y, w_box, h_box = boxes[i]
+                confidence = scores[i]
+                class_id = class_ids[i]
+
+                # Convert [x, y, w, h] back to [x1, y1, x2, y2] for visualization function
+                x1_final = x
+                y1_final = y
+                x2_final = x + w_box
+                y2_final = y + h_box
+
+                final_detections.append([x1_final, y1_final, x2_final, y2_final, confidence, class_id])
+
+        return np.array(final_detections, dtype=np.float32)
+
+    except Exception as e:
+        print(f"Error processing OpenVINO output: {e}")
+        import traceback
+        traceback.print_exc()
+        return np.empty((0, 6), dtype=np.float32) # Return empty array on error
+
+# <<< End of process_openvino_output definition >>>
+
+# <<< Add the new function definition BEFORE main() >>>
+def run_batch_benchmark(args):
+    """
+    Runs batch processing benchmark across all modes for various batch sizes.
+    Uses a single image repeated to form batches.
+    """
+    # Import Path at the beginning
+    from pathlib import Path
+    import time
+    import numpy as np
+    import copy
+    import datetime
+    import json
+    import torch # Ensure torch is imported
+    global TENSORRT_AVAILABLE, OPENVINO_AVAILABLE, ov # Ensure globals are accessible
+
+    print("\n=== Running Batch Processing Benchmark ===")
+    print(f"Testing Batch Sizes: {args.batch_sizes}")
+
+    # --- Configuration & Setup ---
+    base_model_path = args.model
+    int8_model_dir = args.int8_model_dir
+    # Use a single representative image (e.g., the one specified or first test image)
+    if not Path(args.image).is_file(): # Path is now defined
+        print(f"Warning: Specified image '{args.image}' not found. Using first image from test_images/")
+        test_images_dir = Path("test_images")
+        try:
+            args.image = str(next(test_images_dir.glob("*.jpg"))) # Find first jpg
+            print(f"Using image: {args.image}")
+        except StopIteration:
+             print("Error: No images found in test_images/ to use for batch benchmark.")
+             return
+
+    benchmark_runs = args.benchmark_runs # Number of timed runs per batch size
+    # Imports moved to the top
+    # from pathlib import Path
+    # import time
+    # import numpy as np
+    # import copy
+    # import datetime
+    # import json
+    # import torch # Ensure torch is imported
+    # global TENSORRT_AVAILABLE, OPENVINO_AVAILABLE, ov # Ensure globals are accessible
+
+    results = {} # Structure: results[mode_display_name][batch_size] = {time_ms, fps}
+
+    # --- Check INT8 Availability (similar to other benchmark functions) ---
+    int8_available = False
+    if not int8_model_dir:
+        base_pt_model_name = os.path.splitext(os.path.basename(args.model))[0] if args.model.endswith('.pt') else "yolov8n"
+        derived_int8_dir = Path(f"yolov8n_openvino_model_int8")
+        if derived_int8_dir.is_dir() and any(f.endswith('.xml') for f in os.listdir(derived_int8_dir)):
+             print(f"Found potential INT8 model directory at: {derived_int8_dir}")
+             int8_model_dir = str(derived_int8_dir)
+             int8_available = True
+        else:
+             print("Info: INT8 model directory not specified/found. Skipping INT8 modes.")
+    elif os.path.isdir(int8_model_dir) and any(f.endswith('.xml') for f in os.listdir(int8_model_dir)):
+        print(f"Using specified INT8 model directory: {int8_model_dir}")
+        int8_available = True
+    else:
+        print(f"Warning: Specified --int8_model_dir ('{int8_model_dir}') is invalid. Skipping INT8 modes.")
+        int8_model_dir = None
+
+    # --- Define Modes to Run --- (Adjust based on availability)
+    modes_to_run = []
+    modes_to_run.append( ("PyTorch_CPU", "pytorch_cpu", {}) )
+    if TENSORRT_AVAILABLE and torch.cuda.is_available():
+        modes_to_run.append( ("TensorRT_GPU", "tensorrt_gpu", {}) )
+    if OPENVINO_AVAILABLE:
+        modes_to_run.append( ("OpenVINO_FP32_Sync", "openvino_cpu", {"precision": "FP32", "use_async": False, "int8_model_dir": None}) )
+        modes_to_run.append( ("OpenVINO_FP16_Sync", "openvino_cpu", {"precision": "FP16", "use_async": False, "int8_model_dir": None}) )
+        # Async might not be directly comparable in a simple batch loop, focus on Sync for batch time measurement first?
+        # Or implement async throughput measurement separately. Let's start with Sync.
+        # modes_to_run.append( ("OpenVINO_FP32_Async", "openvino_cpu", {"precision": "FP32", "use_async": True, "int8_model_dir": None}) )
+        # modes_to_run.append( ("OpenVINO_FP16_Async", "openvino_cpu", {"precision": "FP16", "use_async": True, "int8_model_dir": None}) )
+        if int8_available:
+            modes_to_run.append( ("OpenVINO_INT8_Sync", "openvino_cpu", {"precision": "INT8", "use_async": False, "int8_model_dir": int8_model_dir}) )
+            # modes_to_run.append( ("OpenVINO_INT8_Async", "openvino_cpu", {"precision": "INT8", "use_async": True, "int8_model_dir": int8_model_dir}) )
+
+    # --- Preprocess the single image once --- #
+    print(f"Preprocessing reference image: {args.image}")
+    try:
+        # Use the existing preprocessing function
+        # Assuming load_and_preprocess_image returns (processed_np_array, original_cv2_image)
+        # We need the numpy array for potential conversion to tensor/feeding OV
+        preprocessed_image_np, original_img_cv2 = load_and_preprocess_image(args.image)
+        # Get original shape from the loaded cv2 image
+        original_shape = original_img_cv2.shape[:2] # (H, W)
+        # Derive input shape from the preprocessed numpy array
+        _, _, input_h, input_w = preprocessed_image_np.shape # (1, C, H, W)
+        input_shape = (input_h, input_w) # (H, W)
+        # Convert to torch tensor for PyTorch/TensorRT and easy batch repetition
+        preprocessed_image_tensor = torch.from_numpy(preprocessed_image_np)
+
+        print(f"Successfully preprocessed image. Tensor shape: {preprocessed_image_tensor.shape}, Input size: {input_shape}")
+
+    except Exception as preproc_e:
+        print(f"Error during actual preprocessing: {preproc_e}")
+        return
+
+    # --- Iterate through Modes and Batch Sizes --- #
+    for display_name, mode_arg, config in modes_to_run:
+        print(f"\n--- Benchmarking Mode: {display_name} ---")
+        results[display_name] = {}
+        model_instance = None # For PyTorch/TensorRT YOLO object
+        core = None           # For OpenVINO
+        model_ov = None       # For OpenVINO loaded model
+        compiled_model = None # For OpenVINO compiled model
+        infer_request = None  # For OpenVINO Sync request
+        device = 'cpu' if mode_arg == 'pytorch_cpu' else 'cuda' if mode_arg == 'tensorrt_gpu' else 'CPU' # Default OV to CPU
+
+        try:
+            # --- Load Model (once per mode) --- #
+            print(f"  Loading model for {display_name}...")
+            if mode_arg == "pytorch_cpu":
+                from ultralytics import YOLO
+                model_instance = YOLO(base_model_path)
+                model_instance.to(torch.device("cpu"))
+                print("  PyTorch CPU model loaded.")
+            elif mode_arg == "tensorrt_gpu":
+                from ultralytics import YOLO
+                # YOLO class handles engine loading/conversion implicitly when device='cuda'
+                model_instance = YOLO(base_model_path)
+                model_instance.to(torch.device("cuda"))
+                # Perform a dummy predict to ensure TRT engine is built/loaded if needed
+                print("  Warming up TensorRT model (compiling engine if necessary)...")
+                _ = model_instance.predict(source=preprocessed_image_tensor.to('cuda'), verbose=False)
+                torch.cuda.synchronize()
+                print("  TensorRT GPU model loaded and warmed up.")
+            elif mode_arg == "openvino_cpu":
+                if not OPENVINO_AVAILABLE:
+                     raise RuntimeError("OpenVINO selected but not available.")
+                core = ov.Core()
+                openvino_model_xml = ""
+                precision = config.get("precision", "FP32")
+                int8_dir = config.get("int8_model_dir")
+
+                if precision == 'INT8':
+                    if not int8_dir or not os.path.isdir(int8_dir):
+                        raise ValueError(f"INT8 precision requires a valid int8_model_dir, got: {int8_dir}")
+                    # Find XML in INT8 dir (Simplified logic from run_inference)
+                    xml_files = list(Path(int8_dir).glob("*.xml"))
+                    if not xml_files:
+                        raise FileNotFoundError(f"No .xml model found in INT8 directory: {int8_dir}")
+                    openvino_model_xml = str(xml_files[0]) # Take the first one found
+                    print(f"  Found INT8 model: {openvino_model_xml}")
+                else: # FP32 or FP16
+                    # Find base FP32 model (Simplified logic from run_inference)
+                    potential_paths = []
+                    if args.model.endswith('.xml'): potential_paths.append(args.model)
+                    elif args.model.endswith('.pt'):
+                         potential_paths.append(os.path.join("models", "yolov8n.xml"))
+                         potential_paths.append(args.model.replace('.pt', '_openvino_model/yolov8n.xml'))
+                    else: potential_paths.append(os.path.join("models", f"{args.model}.xml"))
+
+                    for path in potential_paths:
+                        if os.path.exists(path):
+                            openvino_model_xml = path
+                            break
+                    if not openvino_model_xml:
+                         raise FileNotFoundError(f"Base OpenVINO model (.xml) not found for FP32/FP16. Checked: {potential_paths}")
+                    print(f"  Found base model for {precision}: {openvino_model_xml}")
+
+                # Read the model
+                model_ov = core.read_model(openvino_model_xml)
+                print(f"  OpenVINO model read: {openvino_model_xml}")
+
+                # --- OpenVINO Specific: Initial Compile/Setup (Batch Size 1 or Dynamic) ---
+                # We will handle reshaping and recompiling within the batch loop if needed
+                # Compile with initial batch size (usually 1) or check if dynamic
+                compile_config = {}
+                if precision == 'FP16' and precision != 'INT8':
+                    compile_config[ov.properties.hint.inference_precision()] = "f16"
+
+                print(f"  Initial OpenVINO compile for {device} ({precision})...")
+                # Keep the initially compiled model accessible for reshaping later if needed
+                # compiled_model = core.compile_model(model_ov, device, compile_config) # Compile happens in loop now
+
+            # <<< Model loading complete >>>
+
+            # --- Get OpenVINO input name (do once after loading) ---
+            input_tensor_name_ov = None
+            if mode_arg == "openvino_cpu" and model_ov:
+                try:
+                    input_tensor_name_ov = model_ov.input(0).get_any_name()
+                except Exception:
+                    print("Warning: Could not get input tensor name from OV model.")
+
+            # --- Batch Size Loop --- #
+            for batch_size in args.batch_sizes:
+                print(f"    Testing Batch Size: {batch_size}")
+                batch_times = []
+                compiled_model_for_batch = None # Specific compiled model for this batch size if reshaping
+                infer_request_for_batch = None  # Specific request for this batch size if reshaping
+
+                try:
+                    # --- Create Input Batch --- #
+                    # Use repeat for tensors, ensure correct device for TRT
+                    if mode_arg == "tensorrt_gpu":
+                        input_batch = preprocessed_image_tensor.repeat(batch_size, 1, 1, 1).to('cuda')
+                    else: # PyTorch CPU and OpenVINO (use numpy later)
+                        input_batch = preprocessed_image_tensor.repeat(batch_size, 1, 1, 1).to('cpu')
+
+                    # For OpenVINO, use numpy array
+                    input_batch_np = input_batch.cpu().numpy() if mode_arg == "openvino_cpu" else None
+                    print(f"      Input batch shape: {input_batch.shape}")
+
+                    # --- Handle OpenVINO Reshaping & Compilation --- #
+                    if mode_arg == 'openvino_cpu':
+                        try:
+                            print(f"      Preparing OpenVINO model for batch size {batch_size}...")
+                            input_node = model_ov.input(0)
+                            input_partial_shape = input_node.get_partial_shape()
+                            input_rank = input_partial_shape.rank.get_length() if input_partial_shape.rank.is_static else 4 # Assume rank 4 if dynamic
+
+                            if input_rank != 4:
+                                raise ValueError(f"Expected input rank 4, but got {input_rank}")
+
+                            # Construct new partial shape: [batch_size, dynamic, dynamic, dynamic]
+                            # Using -1 or ov.Dimension() for dynamic dimensions
+                            new_partial_shape = ov.PartialShape([batch_size, -1, -1, -1])
+
+                            print(f"      Attempting reshape with PartialShape: {new_partial_shape}")
+                            # Apply reshape using the input node object or its name
+                            # Use input_tensor_name_ov if available, otherwise try input_node
+                            reshape_target = input_tensor_name_ov if input_tensor_name_ov else input_node
+                            model_ov.reshape({reshape_target: new_partial_shape})
+
+                            # Compile the model specifically for this batch size AFTER reshaping
+                            print(f"      Compiling OpenVINO model for batch {batch_size} ({precision})...")
+                            compiled_model_for_batch = core.compile_model(model_ov, device, compile_config)
+                            if compiled_model_for_batch is None:
+                                raise RuntimeError("Failed to compile OpenVINO model for this batch size.")
+                            # Create infer request for sync execution
+                            infer_request_for_batch = compiled_model_for_batch.create_infer_request()
+                            print("      OpenVINO model ready for batch inference.")
+
+                        except Exception as ov_prep_e:
+                             print(f"      Error preparing OpenVINO model for batch {batch_size}: {ov_prep_e}")
+                             results[display_name][batch_size] = {"error": f"OV Prep Error: {ov_prep_e}"}
+                             continue # Skip to next batch size
+
+                    # --- Warm-up Runs --- #
+                    print("      Warm-up runs...")
+                    for _ in range(3):
+                        if mode_arg == "pytorch_cpu":
+                            _ = model_instance.predict(source=input_batch, verbose=False)
+                        elif mode_arg == "tensorrt_gpu":
+                            _ = model_instance.predict(source=input_batch, verbose=False)
+                            torch.cuda.synchronize()
+                        elif mode_arg == "openvino_cpu":
+                            infer_request_for_batch.infer({input_tensor_name_ov: input_batch_np})
+                            _ = infer_request_for_batch.get_output_tensor().data
+
+                    # --- Benchmark Runs --- #
+                    print("      Benchmark runs...")
+                    for _ in range(benchmark_runs):
+                        start_time = time.perf_counter()
+                        if mode_arg == "pytorch_cpu":
+                            _ = model_instance.predict(source=input_batch, verbose=False)
+                        elif mode_arg == "tensorrt_gpu":
+                            torch.cuda.synchronize()
+                            _ = model_instance.predict(source=input_batch, verbose=False)
+                            torch.cuda.synchronize()
+                        elif mode_arg == "openvino_cpu":
+                            infer_request_for_batch.infer({input_tensor_name_ov: input_batch_np})
+                            _ = infer_request_for_batch.get_output_tensor().data
+                        end_time = time.perf_counter()
+                        batch_times.append((end_time - start_time) * 1000) # Time in ms
+
+                    if not batch_times:
+                         print("      Error: No successful benchmark runs.")
+                         results[display_name][batch_size] = {"error": "Benchmarking failed"}
+                         continue
+
+                    # --- Calculate Metrics --- #
+                    avg_batch_time_ms = np.mean(batch_times)
+                    # Ensure batch_size is not zero
+                    avg_img_time_ms = avg_batch_time_ms / batch_size if batch_size > 0 else 0
+                    fps = (batch_size * 1000) / avg_batch_time_ms if avg_batch_time_ms > 0 else 0
+
+                    print(f"      Avg Batch Time: {avg_batch_time_ms:.2f} ms")
+                    print(f"      Avg Image Time: {avg_img_time_ms:.2f} ms")
+                    print(f"      FPS (Throughput): {fps:.2f}")
+
+                    results[display_name][batch_size] = {
+                        "avg_batch_time_ms": avg_batch_time_ms,
+                        "avg_img_time_ms": avg_img_time_ms,
+                        "fps": fps
+                    }
+                except Exception as batch_e:
+                     print(f"      Error during batch size {batch_size} processing: {batch_e}")
+                     results[display_name][batch_size] = {"error": str(batch_e)}
+                     continue # Continue to next batch size
+
+        except Exception as e:
+            # --- Outer Exception Handling for Mode --- #
+            print(f"  Error benchmarking mode {display_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            results[display_name]["error"] = f"Mode Error: {e}"
+            # Ensure the loop continues to the next mode if one mode fails
+            continue
+        finally:
+            # --- Unload model / cleanup (optional but good practice) --- #
+            print(f"  Finished benchmarking mode: {display_name}")
+            del model_instance
+            del core
+            del model_ov
+            del compiled_model
+            del infer_request
+            del compiled_model_for_batch
+            del infer_request_for_batch
+            # Force garbage collection? Might not be necessary
+            # import gc
+            # gc.collect()
+
+    # --- Print Summary Table --- #
+    print("\n=== Batch Benchmark Summary ===")
+    # Prepare data for table
+    header = ["Mode"] + [f"BS={bs}" for bs in args.batch_sizes]
+    # Find max mode name length for formatting
+    max_name_len = max(len(name) for name in results.keys()) if results else 15
+    header_fmt = f"{{:<{max_name_len}}} |" + " {:^15} |" * len(args.batch_sizes)
+    row_fmt    = f"{{:<{max_name_len}}} |" + " {:^15.2f} |" * len(args.batch_sizes)
+    separator = "-" * (max_name_len + 1) + ("-" * 18) * len(args.batch_sizes)
+
+    print("\n--- Average Batch Time (ms/batch) ---")
+    print(header_fmt.format(*header))
+    print(separator)
+    for mode, batch_data in results.items():
+        if "error" in batch_data:
+             row_data = [mode] + ["ERROR"] * len(args.batch_sizes)
+        else:
+             row_data = [mode] + [batch_data.get(bs, {}).get("avg_batch_time_ms", "N/A") for bs in args.batch_sizes]
+        # Handle cases where data might be missing or is "N/A"
+        formatted_row = [row_data[0]] + [(f"{x:.2f}" if isinstance(x, (int, float)) else str(x)) for x in row_data[1:]]
+        print(header_fmt.format(*formatted_row)) # Use header_fmt to align error messages too
+
+    print("\n--- Average Image Time (ms/image) ---")
+    print(header_fmt.format(*header))
+    print(separator)
+    for mode, batch_data in results.items():
+        if "error" in batch_data:
+             row_data = [mode] + ["ERROR"] * len(args.batch_sizes)
+        else:
+            row_data = [mode] + [batch_data.get(bs, {}).get("avg_img_time_ms", "N/A") for bs in args.batch_sizes]
+        formatted_row = [row_data[0]] + [(f"{x:.2f}" if isinstance(x, (int, float)) else str(x)) for x in row_data[1:]]
+        print(header_fmt.format(*formatted_row))
+
+    print("\n--- Throughput (FPS) ---")
+    print(header_fmt.format(*header))
+    print(separator)
+    for mode, batch_data in results.items():
+        if "error" in batch_data:
+             row_data = [mode] + ["ERROR"] * len(args.batch_sizes)
+        else:
+            row_data = [mode] + [batch_data.get(bs, {}).get("fps", "N/A") for bs in args.batch_sizes]
+        formatted_row = [row_data[0]] + [(f"{x:.2f}" if isinstance(x, (int, float)) else str(x)) for x in row_data[1:]]
+        print(header_fmt.format(*formatted_row))
+
+    # --- Plot Results --- #
+    if args.save_summary:
+        print("\nGenerating batch benchmark plots...")
+        # Call a new plotting function (or adapt the existing one)
+        if 'plot_batch_benchmark_results' in globals():
+             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+             # Pass the raw results dictionary and batch sizes list
+             plot_batch_benchmark_results(results, args.batch_sizes, args.benchmark_dir, timestamp)
+        else:
+             print("Warning: plot_batch_benchmark_results function not found, skipping plot generation.")
+
+        # --- Save Summary --- #
+        print("\nSaving batch benchmark summary...")
+        summary_filename = os.path.join(args.benchmark_dir, f"batch_benchmark_summary_{timestamp}.json")
+        try:
+             # Add args and system info to the saved results
+             full_summary = {
+                 "system_info": { # Regenerate or fetch from global state if needed
+                      "pytorch_version": torch.__version__,
+                      "cuda_available": torch.cuda.is_available(),
+                      "tensorrt_available": TENSORRT_AVAILABLE,
+                      "openvino_available": OPENVINO_AVAILABLE
+                 },
+                 "benchmark_args": vars(args),
+                 "results": results
+             }
+             with open(summary_filename, "w") as f:
+                 json.dump(full_summary, f, indent=2)
+             print(f"Batch benchmark summary saved to: {summary_filename}")
+        except Exception as save_e:
+             print(f"Error saving batch benchmark summary: {save_e}")
+
+    print("\n--- Batch Benchmark Complete ---")
+
+# <<< End of run_batch_benchmark definition >>>
+
+# <<< Add this new plotting function definition (AGAIN) >>>
+def plot_batch_benchmark_results(results_data, batch_sizes, output_dir, timestamp):
+    """
+    Generates plots for batch benchmark results:
+    1. Avg Image Time vs. Batch Size
+    2. Throughput (FPS) vs. Batch Size
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mticker
+    except ImportError:
+        print("Plotting requires matplotlib. Please install it (`pip install matplotlib`)")
+        return
+
+    # Ensure output directory exists
+    output_dir_path = Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+
+    valid_modes = [mode for mode, data in results_data.items() if "error" not in data]
+    if not valid_modes:
+        print("No valid modes found in results data for plotting.")
+        return
+
+    # --- Plot 1: Avg Image Time vs. Batch Size --- #
+    fig1, ax1 = plt.subplots(figsize=(12, 7))
+    # Correct the markers list - remove spaces
+    markers = ['o', 's', '^', 'D', 'v', '>', '<', 'p', '*', 'h'] # Different markers
+    marker_idx = 0
+
+    for mode in valid_modes:
+        mode_data = results_data[mode]
+        times = [mode_data.get(bs, {}).get("avg_img_time_ms") for bs in batch_sizes]
+        # Filter out None or non-numeric values for plotting
+        plot_bs = [bs for bs, t in zip(batch_sizes, times) if isinstance(t, (int, float))]
+        plot_times = [t for t in times if isinstance(t, (int, float))]
+        if plot_bs:
+            ax1.plot(plot_bs, plot_times, marker=markers[marker_idx % len(markers)], linestyle='-', label=mode)
+            marker_idx += 1
+
+    ax1.set_title('Batch Benchmark: Average Image Inference Time')
+    ax1.set_xlabel('Batch Size')
+    ax1.set_ylabel('Time per Image (ms)')
+    ax1.set_xticks(batch_sizes)
+    ax1.grid(True, which='both', linestyle='--', linewidth=0.5)
+    ax1.legend()
+    ax1.set_yscale('log') # Often better for time comparison across scales
+    ax1.yaxis.set_major_formatter(mticker.ScalarFormatter()) # Ensure standard numbers on log scale
+    ax1.yaxis.set_minor_formatter(mticker.NullFormatter())
+
+    plot1_filename = output_dir_path / f"batch_benchmark_avg_img_time_{timestamp}.png"
+    try:
+        fig1.savefig(plot1_filename)
+        print(f"Avg Image Time plot saved to: {plot1_filename}")
+    except Exception as e:
+        print(f"Error saving Avg Image Time plot: {e}")
+    plt.close(fig1)
+
+    # --- Plot 2: Throughput (FPS) vs. Batch Size --- #
+    fig2, ax2 = plt.subplots(figsize=(12, 7))
+    # Use the same corrected markers list
+    marker_idx = 0 # Reset marker index
+
+    for mode in valid_modes:
+        mode_data = results_data[mode]
+        fps_values = [mode_data.get(bs, {}).get("fps") for bs in batch_sizes]
+        # Filter out None or non-numeric values
+        plot_bs = [bs for bs, fps_val in zip(batch_sizes, fps_values) if isinstance(fps_val, (int, float))]
+        plot_fps = [fps_val for fps_val in fps_values if isinstance(fps_val, (int, float))]
+        if plot_bs:
+            ax2.plot(plot_bs, plot_fps, marker=markers[marker_idx % len(markers)], linestyle='-', label=mode)
+            marker_idx += 1
+
+    ax2.set_title('Batch Benchmark: Throughput (FPS)')
+    ax2.set_xlabel('Batch Size')
+    ax2.set_ylabel('Frames Per Second (FPS)')
+    ax2.set_xticks(batch_sizes)
+    ax2.grid(True, which='both', linestyle='--', linewidth=0.5)
+    ax2.legend()
+    # FPS is often linear or sub-linear, log scale might not be best unless range is huge
+    # ax2.set_yscale('log')
+
+    plot2_filename = output_dir_path / f"batch_benchmark_throughput_fps_{timestamp}.png"
+    try:
+        fig2.savefig(plot2_filename)
+        print(f"Throughput (FPS) plot saved to: {plot2_filename}")
+    except Exception as e:
+        print(f"Error saving Throughput plot: {e}")
+    plt.close(fig2)
+
+# <<< End of plot_batch_benchmark_results definition >>>
 
 if __name__ == "__main__":
     main() 

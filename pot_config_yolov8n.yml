@@ -1,0 +1,18 @@
+# pot_config_yolov8n.yml
+model:
+  model_name: yolov8n
+  # CORRECT Path to the FP32 OpenVINO IR model
+  model: models/yolov8n.xml
+  weights: models/yolov8n.bin
+
+engine:
+  type: simplified # Use simplified mode for dataset definition
+  # Define how to load and process the calibration dataset
+  data_source: ./test_images # Path to the calibration images directory
+
+compression:
+  algorithms:
+    - name: DefaultQuantization # Use default INT8 quantization algorithm
+      params:
+        preset: performance # Optimize for performance (vs. mixed/accuracy)
+        stat_subset_size: 300 # Number of images to use for calibration (adjust if needed) 
