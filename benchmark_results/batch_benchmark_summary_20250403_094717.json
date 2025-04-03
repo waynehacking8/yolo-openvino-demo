@@ -1,0 +1,152 @@
+{
+  "system_info": {
+    "pytorch_version": "1.13.1+cu117",
+    "cuda_available": true,
+    "tensorrt_available": true,
+    "openvino_available": true
+  },
+  "benchmark_args": {
+    "image": "test_images/800px-Cat03.jpg",
+    "model": "yolov8n.pt",
+    "threshold": 0.25,
+    "output": "output",
+    "mode": "tensorrt_gpu",
+    "use_tensorrt": false,
+    "tensorrt_model": "",
+    "force_convert": false,
+    "skip_convert": false,
+    "benchmark": false,
+    "benchmark_runs": 10,
+    "compare_all": false,
+    "check_tensorrt": false,
+    "save_summary": true,
+    "num_images": 5,
+    "test_all": false,
+    "results_dir": "test_results",
+    "benchmark_dir": "benchmark_results",
+    "precision": "FP32",
+    "int8_model_dir": "./yolov8n_openvino_model_int8",
+    "use_async": false,
+    "benchmark_openvino_modes": false,
+    "test_all_images_all_modes": false,
+    "run_batch_benchmark": true,
+    "batch_sizes": [
+      1,
+      2,
+      4,
+      8
+    ]
+  },
+  "results": {
+    "PyTorch_CPU": {
+      "1": {
+        "avg_batch_time_ms": 43.885486922226846,
+        "avg_img_time_ms": 43.885486922226846,
+        "fps": 22.786576386224993
+      },
+      "2": {
+        "avg_batch_time_ms": 100.9220790816471,
+        "avg_img_time_ms": 50.46103954082355,
+        "fps": 19.817269107010542
+      },
+      "4": {
+        "avg_batch_time_ms": 185.02870157826692,
+        "avg_img_time_ms": 46.25717539456673,
+        "fps": 21.618267684313857
+      },
+      "8": {
+        "avg_batch_time_ms": 397.250060364604,
+        "avg_img_time_ms": 49.6562575455755,
+        "fps": 20.1384487963512
+      }
+    },
+    "TensorRT_GPU": {
+      "1": {
+        "avg_batch_time_ms": 11.194870877079666,
+        "avg_img_time_ms": 11.194870877079666,
+        "fps": 89.3266220736316
+      },
+      "2": {
+        "avg_batch_time_ms": 9.609420178458095,
+        "avg_img_time_ms": 4.804710089229047,
+        "fps": 208.12910278223626
+      },
+      "4": {
+        "avg_batch_time_ms": 13.616332551464438,
+        "avg_img_time_ms": 3.4040831378661096,
+        "fps": 293.76485811297255
+      },
+      "8": {
+        "avg_batch_time_ms": 19.10811949055642,
+        "avg_img_time_ms": 2.3885149363195524,
+        "fps": 418.6701890761017
+      }
+    },
+    "OpenVINO_FP32_Sync": {
+      "1": {
+        "avg_batch_time_ms": 29.99246909748763,
+        "avg_img_time_ms": 29.99246909748763,
+        "fps": 33.34170310385572
+      },
+      "2": {
+        "avg_batch_time_ms": 54.62233230937272,
+        "avg_img_time_ms": 27.31116615468636,
+        "fps": 36.61506046047794
+      },
+      "4": {
+        "avg_batch_time_ms": 114.90870902780443,
+        "avg_img_time_ms": 28.72717725695111,
+        "fps": 34.81024226833948
+      },
+      "8": {
+        "avg_batch_time_ms": 236.0931577393785,
+        "avg_img_time_ms": 29.511644717422314,
+        "fps": 33.88492947699544
+      }
+    },
+    "OpenVINO_FP16_Sync": {
+      "1": {
+        "avg_batch_time_ms": 27.550830296240747,
+        "avg_img_time_ms": 27.550830296240747,
+        "fps": 36.29654675548736
+      },
+      "2": {
+        "avg_batch_time_ms": 57.9534794902429,
+        "avg_img_time_ms": 28.97673974512145,
+        "fps": 34.51043867584727
+      },
+      "4": {
+        "avg_batch_time_ms": 113.26329265721142,
+        "avg_img_time_ms": 28.315823164302856,
+        "fps": 35.31594311058837
+      },
+      "8": {
+        "avg_batch_time_ms": 231.13097231835127,
+        "avg_img_time_ms": 28.89137153979391,
+        "fps": 34.61241009699511
+      }
+    },
+    "OpenVINO_INT8_Sync": {
+      "1": {
+        "avg_batch_time_ms": 12.111260206438601,
+        "avg_img_time_ms": 12.111260206438601,
+        "fps": 82.56779087847349
+      },
+      "2": {
+        "avg_batch_time_ms": 25.365564040839672,
+        "avg_img_time_ms": 12.682782020419836,
+        "fps": 78.84705409191423
+      },
+      "4": {
+        "avg_batch_time_ms": 50.2821147441864,
+        "avg_img_time_ms": 12.5705286860466,
+        "fps": 79.55114895923263
+      },
+      "8": {
+        "avg_batch_time_ms": 99.19532833155245,
+        "avg_img_time_ms": 12.399416041444056,
+        "fps": 80.64895932659893
+      }
+    }
+  }
+}

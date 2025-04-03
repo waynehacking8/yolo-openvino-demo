@@ -679,13 +679,16 @@ def run_benchmark_comparison(args):
                   timestamp = results.get("timestamp", datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
                   # Use a specific title for this extended comparison
                   plot_benchmark_results(results, args.benchmark_dir, timestamp, title_prefix="Extended Backend")
-    else:
+             else: # Correct indentation for the else block matching the 'if' on line 682
                   print("Warning: plot_benchmark_results function not found, skipping plot generation.")
+                
+        else:
+            print("Warning: plot_benchmark_results function not found, skipping plot generation.")
 
-    # This else corresponds to 'if valid_results:'
+    # This else corresponds to 'if valid_results:' -> Correct indentation
     else:
         print("\nNo valid comparison results obtained.")
-        
+
     return results
 
 def plot_benchmark_results(results, output_dir, timestamp, title_prefix="Backend"):
@@ -785,11 +788,14 @@ def plot_benchmark_results(results, output_dir, timestamp, title_prefix="Backend
     safe_prefix = "".join(c if c.isalnum() else "_" for c in title_prefix).lower()
     plot_filename = os.path.join(output_dir, f"{safe_prefix}_benchmark_comparison_{timestamp}.png")
     try:
-    plt.savefig(plot_filename)
-    print(f"Benchmark plot saved to: {plot_filename}")
+        # Correct indentation
+        plt.savefig(plot_filename)
+        print(f"Benchmark plot saved to: {plot_filename}")
     except Exception as e:
+        # Correct indentation
         print(f"Error saving plot: {e}")
     finally:
+        # Correct indentation
         # Close chart to free memory, should happen regardless of save success
         plt.close(fig)
 
@@ -1043,7 +1049,7 @@ def run_inference(args):
                                  print(f"Found an XML file in INT8 dir, assuming it's the INT8 model: {openvino_model_xml}")
                              else:
                                  print(f"Error: --precision INT8 specified, but no suitable .xml file found in --int8_model_dir: {args.int8_model_dir}")
-                            return None
+                                 return None # Correct indentation
                     else:
                         print(f"Error: --precision INT8 requires a valid --int8_model_dir.")
                         return None
@@ -1124,7 +1130,7 @@ def run_inference(args):
 
                 # --- Inference Execution (Async/Sync Logic follows...) ---
                 # Correct indentation for num_runs
-                    num_runs = args.benchmark_runs if args.benchmark else 1
+                num_runs = args.benchmark_runs if args.benchmark else 1
                 times = []
                 last_outputs = None # Reset last_outputs here
                 avg_time = 0
@@ -1230,8 +1236,8 @@ def run_inference(args):
                     print(f"  Throughput (FPS): {fps:.2f}")
                     print("-" * 30)
 
-                # Correctly indented else corresponding to 'if args.use_async:'
-                    else:
+                # Ensure this else is aligned with the 'if args.use_async:' above
+                else:
                     # --- Synchronous Inference ---
                     print(f"Using Synchronous Inference Pipeline ({device}, {args.precision})")
                     try: # Add try-except around getting output node
@@ -1290,7 +1296,7 @@ def run_inference(args):
                         # Check if detections were successfully processed
                         if detections is not None and detections.shape[0] > 0:
                              print(f"Found {detections.shape[0]} detections after NMS.")
-                        run_visualization(args, original_image, detections)
+                             run_visualization(args, original_image, detections)
                         elif detections is not None: # Correct indentation
                              print("No detections found meeting criteria after NMS.")
                              # Optionally, save the image without boxes or skip saving
@@ -1310,9 +1316,9 @@ def run_inference(args):
             except ImportError as ie:
                  print(f"Import error during OpenVINO processing: {ie}. Ensure OpenVINO and necessary components are installed correctly.")
                  # Correct indentation for traceback
-                    import traceback
-                    traceback.print_exc()
-                    return None
+                 import traceback
+                 traceback.print_exc()
+                 return None
             except Exception as e:
                 print(f"Error during OpenVINO configuration, inference, or post-processing: {e}")
                 import traceback

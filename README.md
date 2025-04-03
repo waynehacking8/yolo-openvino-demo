@@ -44,6 +44,12 @@ python src/simple_demo.py --mode pytorch_cpu --image test_images/800px-Cat03.jpg
 
 ### All Images All Modes Comparison
 
+To run this benchmark:
+
+```bash
+python src/simple_demo.py --test_all_images_all_modes --model yolov8n.pt --int8_model_dir ./yolov8n_openvino_model_int8 --results_dir test_results --benchmark_runs 10 --benchmark_dir benchmark_results --save_summary
+```
+
 *Average performance across all 14 images in `test_images` directory.*
 *(Run Date: approx. 2025-04-02 20:41)*
 
@@ -69,6 +75,12 @@ Key observations from all images test:
 4.  **PyTorch CPU** remains the slowest option.
 
 ### Batch Processing Performance (All Modes)
+
+To run this benchmark:
+
+```bash
+python src/simple_demo.py --run_batch_benchmark --model yolov8n.pt --int8_model_dir ./yolov8n_openvino_model_int8 --benchmark_dir benchmark_results --save_summary --batch_sizes 1 2 4 8
+```
 
 *Benchmark using a single repeated image (`test_images/800px-Cat03.jpg`) across different batch sizes.*
 *(Run Date: approx. 2025-04-02 22:21)*
