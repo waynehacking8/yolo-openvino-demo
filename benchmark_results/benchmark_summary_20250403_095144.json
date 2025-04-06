@@ -1,0 +1,50 @@
+{
+  "system_info": {
+    "pytorch_version": "1.13.1+cu117",
+    "cuda_available": true,
+    "cuda_device": "NVIDIA GeForce RTX 4070 Ti SUPER",
+    "tensorrt_available": true,
+    "tensorrt_version": "10.9.0.34",
+    "openvino_available": true,
+    "openvino_version": "2023.3.0-13775-ceeafaf64f3-releases/2023/3"
+  },
+  "benchmark_settings": {
+    "comparison_image": "test_images/800px-Cat03.jpg",
+    "runs_per_mode": 10,
+    "int8_model_dir_used": "N/A"
+  },
+  "backends": {
+    "PyTorch CPU": {
+      "inference_time": 57.923841243609786,
+      "fps": 17.264048421690628,
+      "speed_ratio": 3.3461454283166554
+    },
+    "TensorRT GPU": {
+      "inference_time": 17.310616793110967,
+      "fps": 57.76801670047747,
+      "speed_ratio": 1.0
+    },
+    "OpenVINO FP32 Sync": {
+      "inference_time": 40.71015533991158,
+      "fps": 24.56389546172073,
+      "speed_ratio": 2.351744933555044
+    },
+    "OpenVINO FP16 Sync": {
+      "inference_time": 30.582247977145016,
+      "fps": 32.69870811155963,
+      "speed_ratio": 1.7666758118818564
+    },
+    "OpenVINO FP32 Async": {
+      "inference_time": 30.140666314400733,
+      "fps": 33.17776686052278,
+      "speed_ratio": 1.74116651501382
+    },
+    "OpenVINO FP16 Async": {
+      "inference_time": 29.180750786326826,
+      "fps": 34.26916625012158,
+      "speed_ratio": 1.685714098756999
+    }
+  },
+  "fastest_backend": "TensorRT GPU",
+  "timestamp": "2025-04-03 09:51:38"
+}

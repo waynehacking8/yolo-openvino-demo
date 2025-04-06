@@ -291,3 +291,9 @@ Quantizing models to INT8 with OpenVINO can significantly boost CPU performance 
         *   `AttributeError: module 'nncf' has no attribute 'Preset'`: Solution was to remove the `preset` argument from `nncf.quantize()` and use defaults.
         *   `TypeError: object of type 'Dataset' has no len()`: Solution was to calculate the number of calibration samples *before* creating the `nncf.Dataset` object and pass that count to `subset_size`.
 4.  **Asynchronous Callback Signature**: OpenVINO's `AsyncInferQueue.set_callback()` API might expect different arguments depending on the version. We encountered errors because the callback was passed extra arguments. Solution was to define the callback to accept extra arguments using `*args`: `
+
+## OpenVINO Post-processing Usage Notes & Backend Details
+
+*   **OpenVINO Post-processing**: **Initially, the only way to process the raw output of the OpenVINO model (e.g., an array with shape `[1, 84, 8400]`) and perform Non-Maximum Suppression (NMS) was to rely on the functionality of the PyTorch/Ultralytics library.** This meant that even when using OpenVINO for inference, the PyTorch environment **had to** be installed and used to complete the post-processing. To remove this dependency, we later introduced the `process_openvino_output` function, which **directly uses OpenCV (`cv2.dnn.NMSBoxes`) and NumPy** to decode the model output, scale coordinates, and perform NMS. This makes the OpenVINO inference and post-processing flow completely independent of PyTorch/Ultralytics.
+*   **Model Paths**: Please ensure your model paths (`--model`, `--int8_model_dir`) are correct, especially when running different modes or inside Docker.
+*   **TensorRT Warm-up**: When using TensorRT, the first inference run might take longer due to engine building and optimization. Subsequent runs will be faster.
