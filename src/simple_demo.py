@@ -2077,19 +2077,21 @@ def run_batch_benchmark(args):
 
     # --- Define Modes to Run --- (Adjust based on availability)
     modes_to_run = []
-    modes_to_run.append( ("PyTorch_CPU", "pytorch_cpu", {}) )
+    # Add use_async key to config
+    modes_to_run.append( ("PyTorch_CPU", "pytorch_cpu", {"use_async": False}) ) 
     if TENSORRT_AVAILABLE and torch.cuda.is_available():
-        modes_to_run.append( ("TensorRT_GPU", "tensorrt_gpu", {}) )
+        modes_to_run.append( ("TensorRT_GPU", "tensorrt_gpu", {"use_async": False}) ) 
     if OPENVINO_AVAILABLE:
+        # Sync Modes
         modes_to_run.append( ("OpenVINO_FP32_Sync", "openvino_cpu", {"precision": "FP32", "use_async": False, "int8_model_dir": None}) )
         modes_to_run.append( ("OpenVINO_FP16_Sync", "openvino_cpu", {"precision": "FP16", "use_async": False, "int8_model_dir": None}) )
-        # Async might not be directly comparable in a simple batch loop, focus on Sync for batch time measurement first?
-        # Or implement async throughput measurement separately. Let's start with Sync.
-        # modes_to_run.append( ("OpenVINO_FP32_Async", "openvino_cpu", {"precision": "FP32", "use_async": True, "int8_model_dir": None}) )
-        # modes_to_run.append( ("OpenVINO_FP16_Async", "openvino_cpu", {"precision": "FP16", "use_async": True, "int8_model_dir": None}) )
         if int8_available:
             modes_to_run.append( ("OpenVINO_INT8_Sync", "openvino_cpu", {"precision": "INT8", "use_async": False, "int8_model_dir": int8_model_dir}) )
-            # modes_to_run.append( ("OpenVINO_INT8_Async", "openvino_cpu", {"precision": "INT8", "use_async": True, "int8_model_dir": int8_model_dir}) )
+        # Async Modes
+        modes_to_run.append( ("OpenVINO_FP32_Async", "openvino_cpu", {"precision": "FP32", "use_async": True, "int8_model_dir": None}) )
+        modes_to_run.append( ("OpenVINO_FP16_Async", "openvino_cpu", {"precision": "FP16", "use_async": True, "int8_model_dir": None}) )
+        if int8_available:
+            modes_to_run.append( ("OpenVINO_INT8_Async", "openvino_cpu", {"precision": "INT8", "use_async": True, "int8_model_dir": int8_model_dir}) )
 
     # --- Preprocess the single image once --- #
     print(f"Preprocessing reference image: {args.image}")
@@ -2209,18 +2211,29 @@ def run_batch_benchmark(args):
 
             # --- Get OpenVINO input name (do once after loading) ---
             input_tensor_name_ov = None
+            output_node_ov = None # Get output node for async result retrieval
             if mode_arg == "openvino_cpu" and model_ov:
                 try:
                     input_tensor_name_ov = model_ov.input(0).get_any_name()
+                    output_node_ov = model_ov.output(0) # Assuming single output
                 except Exception:
-                    print("Warning: Could not get input tensor name from OV model.")
+                    print("Warning: Could not get input/output tensor name from OV model.")
 
             # --- Batch Size Loop --- #
             for batch_size in args.batch_sizes:
                 print(f"    Testing Batch Size: {batch_size}")
-                batch_times = []
+                batch_times_sync = [] # For sync mode timing
+                total_time_async_ms = 0 # For async mode total time
+                completed_requests_async = 0 # Counter for async callbacks
+                
+                # Get async flag from config
+                use_async = config.get("use_async", False)
+
                 compiled_model_for_batch = None # Specific compiled model for this batch size if reshaping
-                infer_request_for_batch = None  # Specific request for this batch size if reshaping
+                # Remove infer_request_for_batch here, as it's sync specific
+                # infer_request_for_batch = None
+                infer_queue = None # For async mode
+                num_infer_requests = 1 # Default for sync, will be updated for async
 
                 try:
                     # --- Create Input Batch --- #
@@ -2256,71 +2269,184 @@ def run_batch_benchmark(args):
                             model_ov.reshape({reshape_target: new_partial_shape})
 
                             # Compile the model specifically for this batch size AFTER reshaping
-                            print(f"      Compiling OpenVINO model for batch {batch_size} ({precision})...")
+                            precision_for_log = config.get("precision", "FP32") # Get precision for logging
+                            print(f"      Compiling OpenVINO model for batch {batch_size} ({precision_for_log})...")
                             compiled_model_for_batch = core.compile_model(model_ov, device, compile_config)
                             if compiled_model_for_batch is None:
                                 raise RuntimeError("Failed to compile OpenVINO model for this batch size.")
-                            # Create infer request for sync execution
-                            infer_request_for_batch = compiled_model_for_batch.create_infer_request()
+                            
+                            # --- Setup for Sync or Async Execution --- #
+                            if use_async:
+                                try:
+                                     num_req_prop = compiled_model_for_batch.get_property(ov.properties.hint.num_requests())
+                                     # Ensure num_req_prop is a positive integer
+                                     num_infer_requests = int(num_req_prop) if num_req_prop and int(num_req_prop) > 0 else 1
+                                except Exception as e:
+                                     print(f"      Warning: Could not get optimal number of infer requests ({e}), defaulting to 1.")
+                                     num_infer_requests = 1 # Fallback
+                                print(f"      Using {num_infer_requests} Infer Requests for Async Queue.")
+                                # Ensure jobs parameter is an integer
+                                infer_queue = ov.AsyncInferQueue(compiled_model_for_batch, int(num_infer_requests))
+                                
+                                # Define callback (needs access to counter)
+                                def callback_counter(request, userdata):
+                                     nonlocal completed_requests_async
+                                     completed_requests_async += 1
+                                
+                                infer_queue.set_callback(callback_counter)
+                                print("      OpenVINO AsyncInferQueue ready.")
+                            # else: # Sync setup (InferRequest created just before inference loop)
+                                # infer_request_for_batch = compiled_model_for_batch.create_infer_request()
                             print("      OpenVINO model ready for batch inference.")
 
                         except Exception as ov_prep_e:
                              print(f"      Error preparing OpenVINO model for batch {batch_size}: {ov_prep_e}")
-                             results[display_name][batch_size] = {"error": f"OV Prep Error: {ov_prep_e}"}
+                             results[display_name][batch_size] = {"error": f"OV Prep Error: {ov_prep_e}"} 
                              continue # Skip to next batch size
 
-                    # --- Warm-up Runs --- #
-                    print("      Warm-up runs...")
-                    for _ in range(3):
-                        if mode_arg == "pytorch_cpu":
-                            _ = model_instance.predict(source=input_batch, verbose=False)
-                        elif mode_arg == "tensorrt_gpu":
-                            _ = model_instance.predict(source=input_batch, verbose=False)
-                            torch.cuda.synchronize()
-                        elif mode_arg == "openvino_cpu":
-                            infer_request_for_batch.infer({input_tensor_name_ov: input_batch_np})
-                            _ = infer_request_for_batch.get_output_tensor().data
-
+                    # --- Warm-up Runs --- # 
+                    # MOVED: Warmup logic is now inside the specific Sync/Async blocks below
+                    # print("      Warm-up runs...")
+                    # ... (Removed old warmup block) ...
+                    
                     # --- Benchmark Runs --- #
                     print("      Benchmark runs...")
-                    for _ in range(benchmark_runs):
-                        start_time = time.perf_counter()
-                        if mode_arg == "pytorch_cpu":
-                            _ = model_instance.predict(source=input_batch, verbose=False)
-                        elif mode_arg == "tensorrt_gpu":
-                            torch.cuda.synchronize()
-                            _ = model_instance.predict(source=input_batch, verbose=False)
-                            torch.cuda.synchronize()
-                        elif mode_arg == "openvino_cpu":
-                            infer_request_for_batch.infer({input_tensor_name_ov: input_batch_np})
-                            _ = infer_request_for_batch.get_output_tensor().data
-                        end_time = time.perf_counter()
-                        batch_times.append((end_time - start_time) * 1000) # Time in ms
+                    completed_requests_async = 0 # Reset counter before runs
+                    
+                    if use_async and mode_arg == 'openvino_cpu':
+                        # --- Async Benchmark Logic --- # 
+                        if not infer_queue:
+                            raise RuntimeError("AsyncInferQueue was not initialized.")
+                        if not input_tensor_name_ov:
+                            # Try to get it from compiled model if not available earlier
+                            try:
+                                input_tensor_name_ov = compiled_model_for_batch.input(0).get_any_name()
+                            except Exception as final_name_e:
+                                raise RuntimeError(f"Cannot determine input tensor name for async inference: {final_name_e}")
+                                
+                        input_data = {input_tensor_name_ov: input_batch_np}
+                        
+                        # <<< Async Warm-up moved here >>>
+                        print("      Async Warm-up...")
+                        for _ in range(min(3, benchmark_runs)): # Warmup with a few runs
+                            infer_queue.start_async(input_data)
+                        infer_queue.wait_all() # Wait for warmup to finish
+                        completed_requests_async = 0 # Reset counter after warmup
+                        # <<< End of Async Warm-up >>>
+                        
+                        print(f"      Submitting {benchmark_runs} async requests...")
+                        total_start_time = time.perf_counter() 
+                        
+                        successful_submissions = 0
+                        for i in range(benchmark_runs):
+                            try:
+                                infer_queue.start_async(input_data)
+                                successful_submissions += 1
+                            except Exception as submit_e:
+                                 print(f"Error submitting async request {i+1}/{benchmark_runs}: {submit_e}")
+                                 break # Stop submitting on error
+                                 
+                        if successful_submissions > 0:
+                            infer_queue.wait_all() # Wait for all submitted requests
+                        else:
+                             print("      No async requests were submitted successfully.")
+                             
+                        total_end_time = time.perf_counter()
+                        total_time_async_ms = (total_end_time - total_start_time) * 1000
+                        
+                        if completed_requests_async != successful_submissions:
+                             print(f"Warning: Submitted {successful_submissions} async requests, but callback counted {completed_requests_async}.")
+                             if completed_requests_async == 0: # If none completed, treat as failure
+                                 raise RuntimeError("Async inference failed: No requests completed.")
+                        
+                        # Use completed_requests_async for calculation if it seems reliable, else successful_submissions
+                        # Let's use successful_submissions as it reflects what was sent to wait_all
+                        runs_to_average = successful_submissions if successful_submissions > 0 else 1
 
-                    if not batch_times:
-                         print("      Error: No successful benchmark runs.")
-                         results[display_name][batch_size] = {"error": "Benchmarking failed"}
-                         continue
+                        # Calculate metrics based on total time for all runs
+                        avg_batch_time_ms = total_time_async_ms / runs_to_average
+                        avg_img_time_ms = avg_batch_time_ms / batch_size if batch_size > 0 else 0
+                        # FPS is total images processed / total time in seconds
+                        total_images_processed = runs_to_average * batch_size
+                        total_time_sec = total_time_async_ms / 1000
+                        fps = total_images_processed / total_time_sec if total_time_sec > 0 else 0
+                        
+                        print(f"      Total Async Time ({runs_to_average} runs): {total_time_async_ms:.2f} ms")
+                        
+                    else:
+                        # --- Sync Benchmark Logic (PyTorch, TensorRT, OpenVINO Sync) --- # 
+                        # Create sync infer request here if needed
+                        infer_request_sync = None
+                        if mode_arg == 'openvino_cpu' and not use_async:
+                            if not compiled_model_for_batch:
+                                raise RuntimeError("Compiled model not available for sync inference.")
+                            # Ensure input tensor name is available before creating request
+                            if not input_tensor_name_ov:
+                                try:
+                                     input_tensor_name_ov = compiled_model_for_batch.input(0).get_any_name()
+                                except Exception as final_name_e:
+                                     raise RuntimeError(f"Cannot determine input tensor name for sync inference: {final_name_e}")
+                            # Create the infer request *before* the warm-up loop
+                            infer_request_sync = compiled_model_for_batch.create_infer_request()
 
-                    # --- Calculate Metrics --- #
-                    avg_batch_time_ms = np.mean(batch_times)
-                    # Ensure batch_size is not zero
-                    avg_img_time_ms = avg_batch_time_ms / batch_size if batch_size > 0 else 0
-                    fps = (batch_size * 1000) / avg_batch_time_ms if avg_batch_time_ms > 0 else 0
+                        # Warm-up Runs
+                        print("      Sync Warm-up...")
+                        # <<< Sync Warm-up moved here >>>
+                        for _ in range(3):
+                            if mode_arg == "pytorch_cpu":
+                                _ = model_instance.predict(source=input_batch, verbose=False)
+                            elif mode_arg == "tensorrt_gpu":
+                                _ = model_instance.predict(source=input_batch, verbose=False)
+                                torch.cuda.synchronize()
+                            elif mode_arg == "openvino_cpu": # Sync OpenVINO
+                                if not infer_request_sync: raise RuntimeError("Sync InferRequest not ready for warm-up.")
+                                infer_request_sync.infer({input_tensor_name_ov: input_batch_np})
+                                _ = infer_request_sync.get_output_tensor().data
+                        # <<< End of Sync Warm-up >>>
+                                
+                        # Timed Benchmark Runs
+                        batch_times_sync = [] # Re-initialize here
+                        for _ in range(benchmark_runs):
+                            start_time = time.perf_counter()
+                            if mode_arg == "pytorch_cpu":
+                                _ = model_instance.predict(source=input_batch, verbose=False)
+                            elif mode_arg == "tensorrt_gpu":
+                                torch.cuda.synchronize()
+                                _ = model_instance.predict(source=input_batch, verbose=False)
+                                torch.cuda.synchronize()
+                            elif mode_arg == "openvino_cpu": # Sync OpenVINO
+                                if not infer_request_sync: raise RuntimeError("Sync InferRequest not ready.")
+                                infer_request_sync.infer({input_tensor_name_ov: input_batch_np})
+                                _ = infer_request_sync.get_output_tensor().data # Ensure output is retrieved
+                            end_time = time.perf_counter()
+                            batch_times_sync.append((end_time - start_time) * 1000) # Time in ms
+                            
+                        if not batch_times_sync:
+                             print("      Error: No successful sync benchmark runs.")
+                             results[display_name][batch_size] = {"error": "Sync Benchmarking failed"}
+                             continue # Skip to next batch size
+                             
+                        # Calculate metrics for Sync mode
+                        avg_batch_time_ms = np.mean(batch_times_sync)
+                        avg_img_time_ms = avg_batch_time_ms / batch_size if batch_size > 0 else 0
+                        fps = (batch_size * 1000) / avg_batch_time_ms if avg_batch_time_ms > 0 else 0
 
+                    # --- Calculate Metrics (Common part after Sync/Async logic) --- #
+                    # Metrics (avg_batch_time_ms, avg_img_time_ms, fps) are calculated within each branch now
                     print(f"      Avg Batch Time: {avg_batch_time_ms:.2f} ms")
                     print(f"      Avg Image Time: {avg_img_time_ms:.2f} ms")
                     print(f"      FPS (Throughput): {fps:.2f}")
 
+                    # <<< Add this line back to store results >>>
                     results[display_name][batch_size] = {
                         "avg_batch_time_ms": avg_batch_time_ms,
                         "avg_img_time_ms": avg_img_time_ms,
                         "fps": fps
                     }
+                    
                 except Exception as batch_e:
                      print(f"      Error during batch size {batch_size} processing: {batch_e}")
                      results[display_name][batch_size] = {"error": str(batch_e)}
-                     continue # Continue to next batch size
 
         except Exception as e:
             # --- Outer Exception Handling for Mode --- #
@@ -2339,7 +2465,6 @@ def run_batch_benchmark(args):
             del compiled_model
             del infer_request
             del compiled_model_for_batch
-            del infer_request_for_batch
             # Force garbage collection? Might not be necessary
             # import gc
             # gc.collect()
@@ -2412,7 +2537,8 @@ def run_batch_benchmark(args):
                       "openvino_available": OPENVINO_AVAILABLE
                  },
                  "benchmark_args": vars(args),
-                 "results": results
+                 "results": results, # Contains results[display_name][batch_size] = {time_ms, fps}
+                 "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
              }
              with open(summary_filename, "w") as f:
                  json.dump(full_summary, f, indent=2)
@@ -2430,6 +2556,7 @@ def plot_batch_benchmark_results(results_data, batch_sizes, output_dir, timestam
     Generates plots for batch benchmark results:
     1. Avg Image Time vs. Batch Size
     2. Throughput (FPS) vs. Batch Size
+    Includes both Sync and Async modes if present.
     """
     try:
         import matplotlib.pyplot as plt
@@ -2501,7 +2628,7 @@ def plot_batch_benchmark_results(results_data, batch_sizes, output_dir, timestam
     ax2.set_ylabel('Frames Per Second (FPS)')
     ax2.set_xticks(batch_sizes)
     ax2.grid(True, which='both', linestyle='--', linewidth=0.5)
-    ax2.legend()
+    ax2.legend(loc='upper left') # Adjust legend position
     # FPS is often linear or sub-linear, log scale might not be best unless range is huge
     # ax2.set_yscale('log')
 

@@ -1,0 +1,51 @@
+{
+  "system_info": {
+    "pytorch_version": "1.13.1+cu117",
+    "cuda_available": true,
+    "tensorrt_available": true,
+    "openvino_available": true
+  },
+  "benchmark_args": {
+    "image": "test_images/800px-Cat03.jpg",
+    "model": "yolov8n.pt",
+    "threshold": 0.25,
+    "output": "output",
+    "mode": "tensorrt_gpu",
+    "use_tensorrt": false,
+    "tensorrt_model": "",
+    "force_convert": false,
+    "skip_convert": false,
+    "benchmark": false,
+    "benchmark_runs": 50,
+    "compare_all": false,
+    "check_tensorrt": false,
+    "save_summary": true,
+    "num_images": 5,
+    "test_all": false,
+    "results_dir": "test_results",
+    "benchmark_dir": "benchmark_results",
+    "precision": "FP32",
+    "int8_model_dir": "./yolov8n_openvino_model_int8",
+    "use_async": false,
+    "benchmark_openvino_modes": false,
+    "test_all_images_all_modes": false,
+    "run_batch_benchmark": true,
+    "batch_sizes": [
+      1,
+      2,
+      4,
+      8
+    ]
+  },
+  "results": {
+    "PyTorch_CPU": {},
+    "TensorRT_GPU": {},
+    "OpenVINO_FP32_Sync": {},
+    "OpenVINO_FP16_Sync": {},
+    "OpenVINO_INT8_Sync": {},
+    "OpenVINO_FP32_Async": {},
+    "OpenVINO_FP16_Async": {},
+    "OpenVINO_INT8_Async": {}
+  },
+  "timestamp": "2025-04-07 19:41:04"
+}

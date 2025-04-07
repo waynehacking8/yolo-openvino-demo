@@ -1,0 +1,129 @@
+{
+  "system_info": {
+    "pytorch_version": "1.13.1+cu117",
+    "cuda_available": true,
+    "tensorrt_available": true,
+    "openvino_available": true
+  },
+  "benchmark_args": {
+    "image": "test_images/800px-Cat03.jpg",
+    "model": "yolov8n.pt",
+    "threshold": 0.25,
+    "output": "output",
+    "mode": "tensorrt_gpu",
+    "use_tensorrt": false,
+    "tensorrt_model": "",
+    "force_convert": false,
+    "skip_convert": false,
+    "benchmark": false,
+    "benchmark_runs": 50,
+    "compare_all": false,
+    "check_tensorrt": false,
+    "save_summary": true,
+    "num_images": 5,
+    "test_all": false,
+    "results_dir": "test_results",
+    "benchmark_dir": "benchmark_results",
+    "precision": "FP32",
+    "int8_model_dir": "./yolov8n_openvino_model_int8",
+    "use_async": false,
+    "benchmark_openvino_modes": false,
+    "test_all_images_all_modes": false,
+    "run_batch_benchmark": true,
+    "batch_sizes": [
+      1,
+      2,
+      4,
+      8
+    ]
+  },
+  "results": {
+    "PyTorch_CPU": {},
+    "TensorRT_GPU": {},
+    "OpenVINO_FP32_Sync": {
+      "1": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "2": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "4": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "8": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      }
+    },
+    "OpenVINO_FP16_Sync": {
+      "1": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "2": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "4": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "8": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      }
+    },
+    "OpenVINO_INT8_Sync": {
+      "1": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "2": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "4": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      },
+      "8": {
+        "error": "name 'infer_request_for_batch' is not defined"
+      }
+    },
+    "OpenVINO_FP32_Async": {
+      "1": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[1,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[1,84,21..] type: f32>\n]>, '0'"
+      },
+      "2": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[2,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[2,84,21..] type: f32>\n]>, '0'"
+      },
+      "4": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[4,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[4,84,21..] type: f32>\n]>, '0'"
+      },
+      "8": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[8,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[8,84,21..] type: f32>\n]>, '0'"
+      }
+    },
+    "OpenVINO_FP16_Async": {
+      "1": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[x] shape[1,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[] shape[1,84,8400] type: f32>\n]>, '0'"
+      },
+      "2": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[x] shape[2,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[] shape[2,84,8400] type: f32>\n]>, '0'"
+      },
+      "4": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[x] shape[4,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[] shape[4,84,8400] type: f32>\n]>, '0'"
+      },
+      "8": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[x] shape[8,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[] shape[8,84,8400] type: f32>\n]>, '0'"
+      }
+    },
+    "OpenVINO_INT8_Async": {
+      "1": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[1,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[1,84,21..] type: f32>\n]>, '0'"
+      },
+      "2": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[2,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[2,84,21..] type: f32>\n]>, '0'"
+      },
+      "4": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[4,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[4,84,21..] type: f32>\n]>, '0'"
+      },
+      "8": {
+        "error": "OV Prep Error: __init__(): incompatible constructor arguments. The following argument types are supported:\n    1. openvino._pyopenvino.AsyncInferQueue(model: openvino._pyopenvino.CompiledModel, jobs: int = 0)\n\nInvoked with: <CompiledModel:\ninputs[\n<ConstOutput: names[images] shape[8,?,?,?] type: f32>\n]\noutputs[\n<ConstOutput: names[output0] shape[8,84,21..] type: f32>\n]>, '0'"
+      }
+    }
+  },
+  "timestamp": "2025-04-07 19:33:19"
+}

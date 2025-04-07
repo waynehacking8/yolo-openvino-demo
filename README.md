@@ -83,48 +83,58 @@ python src/simple_demo.py --run_batch_benchmark --model yolov8n.pt --int8_model_
 ```
 
 *Benchmark using a single repeated image (`test_images/800px-Cat03.jpg`) across different batch sizes.*
-*(Run Date: approx. 2025-04-07 17:15)*
+*(Run Date: approx. 2025-04-07 19:44)*
 
 **Performance Plots:**
 
-![Average Image Time vs. Batch Size](benchmark_results/batch_benchmark_avg_img_time_20250407_171534.png)
-![Throughput (FPS) vs. Batch Size](benchmark_results/batch_benchmark_throughput_fps_20250407_171534.png)
+![Average Image Time vs. Batch Size](benchmark_results/batch_benchmark_avg_img_time_20250407_194430.png)
+![Throughput (FPS) vs. Batch Size](benchmark_results/batch_benchmark_throughput_fps_20250407_194430.png)
 
 **Detailed Metrics:**
 
 **Average Batch Time (ms/batch):**
-| Mode               | BS=1    | BS=2    | BS=4    | BS=8    |
-|--------------------|---------|---------|---------|---------|
-| PyTorch_CPU        | 39.95   | 81.32   | 164.85  | 336.93  |
-| TensorRT_GPU       | 10.85   | 10.37   | 10.63   | 17.03   |
-| OpenVINO_FP32_Sync | 30.40   | 54.68   | 106.56  | 223.58  |
-| OpenVINO_FP16_Sync | 25.93   | 56.74   | 109.48  | 222.03  |
-| OpenVINO_INT8_Sync | 12.29   | 23.71   | 45.95   | 93.18   |
+| Mode                | BS=1    | BS=2    | BS=4    | BS=8    |
+|---------------------|---------|---------|---------|---------|
+| PyTorch_CPU         | 36.90   | 80.20   | 163.35  | 336.57  |
+| TensorRT_GPU        | 7.76    | 8.76    | 10.63   | 15.18   |
+| OpenVINO_FP32_Sync  | 25.22   | 50.66   | 103.10  | 217.90  |
+| OpenVINO_FP16_Sync  | 26.18   | 52.33   | 107.58  | 219.83  |
+| OpenVINO_INT8_Sync  | 12.83   | 24.27   | 46.29   | 93.17   |
+| OpenVINO_FP32_Async | 26.96   | 51.21   | 105.66  | 213.65  |
+| OpenVINO_FP16_Async | 25.83   | 49.59   | 106.29  | 224.95  |
+| OpenVINO_INT8_Async | 11.59   | 22.53   | 44.29   | 92.46   |
 
 **Average Image Time (ms/image):**
-| Mode               | BS=1    | BS=2    | BS=4    | BS=8    |
-|--------------------|---------|---------|---------|---------|
-| PyTorch_CPU        | 39.95   | 40.66   | 41.21   | 42.12   |
-| TensorRT_GPU       | 10.85   | 5.18    | 2.66    | 2.13    |
-| OpenVINO_FP32_Sync | 30.40   | 27.34   | 26.64   | 27.95   |
-| OpenVINO_FP16_Sync | 25.93   | 28.37   | 27.37   | 27.75   |
-| OpenVINO_INT8_Sync | 12.29   | 11.86   | 11.49   | 11.65   |
+| Mode                | BS=1    | BS=2    | BS=4    | BS=8    |
+|---------------------|---------|---------|---------|---------|
+| PyTorch_CPU         | 36.90   | 40.10   | 40.84   | 42.07   |
+| TensorRT_GPU        | 7.76    | 4.38    | 2.66    | 1.90    |
+| OpenVINO_FP32_Sync  | 25.22   | 25.33   | 25.77   | 27.24   |
+| OpenVINO_FP16_Sync  | 26.18   | 26.16   | 26.89   | 27.48   |
+| OpenVINO_INT8_Sync  | 12.83   | 12.13   | 11.57   | 11.65   |
+| OpenVINO_FP32_Async | 26.96   | 25.60   | 26.42   | 26.71   |
+| OpenVINO_FP16_Async | 25.83   | 24.80   | 26.57   | 28.12   |
+| OpenVINO_INT8_Async | 11.59   | 11.26   | 11.07   | 11.56   |
 
 **Throughput (FPS):**
-| Mode               | BS=1    | BS=2    | BS=4    | BS=8    |
-|--------------------|---------|---------|---------|---------|
-| PyTorch_CPU        | 25.03   | 24.59   | 24.27   | 23.74   |
-| TensorRT_GPU       | 92.18   | 192.90  | 376.12  | 469.77  |
-| OpenVINO_FP32_Sync | 32.89   | 36.58   | 37.54   | 35.78   |
-| OpenVINO_FP16_Sync | 38.56   | 35.25   | 36.53   | 36.03   |
-| OpenVINO_INT8_Sync | 81.34   | 84.35   | 87.04   | 85.86   |
+| Mode                | BS=1    | BS=2    | BS=4    | BS=8    |
+|---------------------|---------|---------|---------|---------|
+| PyTorch_CPU         | 27.10   | 24.94   | 24.49   | 23.77   |
+| TensorRT_GPU        | 128.94  | 228.28  | 376.19  | 526.87  |
+| OpenVINO_FP32_Sync  | 39.65   | 39.48   | 38.80   | 36.71   |
+| OpenVINO_FP16_Sync  | 38.20   | 38.22   | 37.18   | 36.39   |
+| OpenVINO_INT8_Sync  | 77.95   | 82.42   | 86.42   | 85.86   |
+| OpenVINO_FP32_Async | 37.10   | 39.06   | 37.86   | 37.44   |
+| OpenVINO_FP16_Async | 38.72   | 40.33   | 37.63   | 35.56   |
+| OpenVINO_INT8_Async | 86.25   | 88.77   | 90.31   | 86.53   |
 
 Key observations from batch benchmark:
-1.  **TensorRT GPU** exhibits significant throughput scaling as batch size increases, drastically reducing the average time per image.
-2.  **OpenVINO INT8 Sync** remains the top performer on CPU, demonstrating stable and efficient performance across all batch sizes, with minimal scaling benefits from batching on this CPU setup.
-3.  **OpenVINO FP16 Sync** is now faster than FP32 Sync at Batch Size 1, aligning better with previous single-image tests.
-4.  **OpenVINO FP32 Sync and FP16 Sync** show limited (though slightly positive) scaling benefits from batching on CPU compared to the GPU. At larger batch sizes (2, 4, 8), FP32 Sync performed slightly better or comparably to FP16 Sync in this specific run.
-5.  **PyTorch CPU** remains the slowest and shows negligible performance changes with increasing batch size.
+1.  **TensorRT GPU** remains the king of throughput, demonstrating excellent scaling with increasing batch size.
+2.  **OpenVINO INT8 Async** consistently delivers the best performance on the CPU across all tested batch sizes. INT8 Sync is a close second.
+3.  **Asynchronous execution (Async)** provides a small throughput advantage over Synchronous (Sync) for OpenVINO INT8, FP16, and FP32 on CPU in most cases, particularly noticeable at smaller batch sizes.
+4.  **OpenVINO FP16 vs FP32 on CPU:** FP16 shows a clear advantage at Batch Size 1. However, at larger batch sizes (BS=2, 4, 8) in this test, FP32 performed slightly better or comparably to FP16.
+5.  **CPU Batch Scaling:** Unlike the GPU, OpenVINO on CPU (FP32/FP16) shows limited throughput gains from batching beyond BS=2. INT8 shows some moderate scaling up to BS=4.
+6.  **PyTorch CPU** is the slowest option and does not benefit from batch processing.
 
 ## Docker Usage
 
