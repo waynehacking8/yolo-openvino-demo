@@ -51,79 +51,80 @@ python src/simple_demo.py --test_all_images_all_modes --model yolov8n.pt --int8_
 ```
 
 *Average performance across all 14 images in `test_images` directory.*
-*(Run Date: approx. 2025-04-02 20:41)*
+*(Run Date: approx. 2025-04-07 17:01)*
 
-![All Images All Modes Comparison](benchmark_results/all_images_all_modes_benchmark_comparison_20250402_204140.png)
+![All Images All Modes Comparison](benchmark_results/all_images_all_modes_benchmark_comparison_20250407_170143.png)
 
-| Mode                | Avg Time (ms) | Avg FPS   | Speed Ratio (vs Fastest) | Processed |
-|-------------------|---------------|-----------|--------------------------|-----------|
-| **TensorRT GPU**        |     **12.25**     | **81.65** |        **1.00x**         | 14/14     |
-| OpenVINO INT8 Sync  |     14.03     |   71.28   |         1.15x          | 14/14     |
-| OpenVINO INT8 Async |     15.01     |   66.64   |         1.23x          | 14/14     |
-| OpenVINO FP32 Sync  |     28.89     |   34.61   |         2.36x          | 14/14     |
-| OpenVINO FP16 Sync  |     29.85     |   33.51   |         2.44x          | 14/14     |
-| OpenVINO FP16 Async |     30.52     |   32.76   |         2.49x          | 14/14     |
-| OpenVINO FP32 Async |     30.55     |   32.73   |         2.49x          | 14/14     |
-| PyTorch CPU         |     45.48     |   21.99   |         3.71x          | 14/14     |
-
-*(Note: Fastest mode determined by minimum average time across all tested images.)*
+| Mode                | Avg Time (ms) | Avg FPS   | Speed Ratio | Processed |
+|-------------------|---------------|-----------|-------------|-----------|
+| OpenVINO_INT8_Async |     13.13     |   76.15   |    1.00    x| 14/14     |
+| OpenVINO_INT8_Sync  |     14.13     |   70.79   |    1.08    x| 14/14     |
+| TensorRT_GPU        |     15.78     |   63.37   |    1.20    x| 14/14     |
+| OpenVINO_FP16_Sync  |     25.65     |   38.99   |    1.95    x| 14/14     |
+| OpenVINO_FP16_Async |     26.02     |   38.43   |    1.98    x| 14/14     |
+| OpenVINO_FP32_Async |     28.46     |   35.14   |    2.17    x| 14/14     |
+| OpenVINO_FP32_Sync  |     29.51     |   33.89   |    2.25    x| 14/14     |
+| PyTorch_CPU         |     39.96     |   25.03   |    3.04    x| 14/14     |
 
 Key observations from all images test:
-1.  **TensorRT GPU** consistently provides the best average performance.
-2.  **OpenVINO INT8 (Sync/Async)** is significantly faster than FP32/FP16 on CPU, offering the second-best performance tier.
-3.  **OpenVINO FP32/FP16** modes show similar performance, with FP32 Sync being slightly faster than FP16 Sync in this average test. Asynchronous execution for FP32/FP16 offers minimal benefit on average across these images.
-4.  **PyTorch CPU** remains the slowest option.
+1.  **OpenVINO INT8 Async** is now the fastest mode on average across the test images.
+2.  **OpenVINO INT8 Sync** follows closely as the second fastest, demonstrating the significant advantage of INT8 on CPU.
+3.  **TensorRT GPU** provides the third-best performance.
+4.  **OpenVINO FP16 (Sync/Async)** modes are now demonstrably faster than their FP32 counterparts in this test run, although still significantly slower than INT8 or TensorRT.
+5.  **Asynchronous execution** shows mixed results: slightly beneficial for INT8 and FP32, but slightly detrimental for FP16 in this average.
+6.  **PyTorch CPU** remains the slowest option.
 
 ### Batch Processing Performance (All Modes)
 
 To run this benchmark:
 
 ```bash
-python src/simple_demo.py --run_batch_benchmark --model yolov8n.pt --int8_model_dir ./yolov8n_openvino_model_int8 --benchmark_dir benchmark_results --save_summary --batch_sizes 1 2 4 8
+python src/simple_demo.py --run_batch_benchmark --model yolov8n.pt --int8_model_dir ./yolov8n_openvino_model_int8 --benchmark_dir benchmark_results --save_summary --batch_sizes 1 2 4 8 --benchmark_runs 50
 ```
 
 *Benchmark using a single repeated image (`test_images/800px-Cat03.jpg`) across different batch sizes.*
-*(Run Date: approx. 2025-04-02 22:21)*
+*(Run Date: approx. 2025-04-07 17:15)*
 
 **Performance Plots:**
 
-![Average Image Time vs. Batch Size](benchmark_results/batch_benchmark_avg_img_time_20250402_222119.png)
-![Throughput (FPS) vs. Batch Size](benchmark_results/batch_benchmark_throughput_fps_20250402_222119.png)
+![Average Image Time vs. Batch Size](benchmark_results/batch_benchmark_avg_img_time_20250407_171534.png)
+![Throughput (FPS) vs. Batch Size](benchmark_results/batch_benchmark_throughput_fps_20250407_171534.png)
 
 **Detailed Metrics:**
 
 **Average Batch Time (ms/batch):**
 | Mode               | BS=1    | BS=2    | BS=4    | BS=8    |
 |--------------------|---------|---------|---------|---------|
-| PyTorch CPU        | 43.40   | 87.09   | 177.05  | 357.74  |
-| TensorRT GPU       | 8.73    | 9.89    | 11.30   | 15.82   |
-| OpenVINO FP32 Sync | 24.89   | 51.18   | 103.09  | 236.89  |
-| OpenVINO FP16 Sync | 25.35   | 51.94   | 104.74  | 220.22  |
-| OpenVINO INT8 Sync | 11.89   | 22.47   | 46.39   | 95.34   |
+| PyTorch_CPU        | 39.95   | 81.32   | 164.85  | 336.93  |
+| TensorRT_GPU       | 10.85   | 10.37   | 10.63   | 17.03   |
+| OpenVINO_FP32_Sync | 30.40   | 54.68   | 106.56  | 223.58  |
+| OpenVINO_FP16_Sync | 25.93   | 56.74   | 109.48  | 222.03  |
+| OpenVINO_INT8_Sync | 12.29   | 23.71   | 45.95   | 93.18   |
 
 **Average Image Time (ms/image):**
 | Mode               | BS=1    | BS=2    | BS=4    | BS=8    |
 |--------------------|---------|---------|---------|---------|
-| PyTorch CPU        | 43.40   | 43.54   | 44.26   | 44.72   |
-| TensorRT GPU       | 8.73    | 4.94    | 2.83    | 1.98    |
-| OpenVINO FP32 Sync | 24.89   | 25.59   | 25.77   | 29.61   |
-| OpenVINO FP16 Sync | 25.35   | 25.97   | 26.19   | 27.53   |
-| OpenVINO INT8 Sync | 11.89   | 11.23   | 11.60   | 11.92   |
+| PyTorch_CPU        | 39.95   | 40.66   | 41.21   | 42.12   |
+| TensorRT_GPU       | 10.85   | 5.18    | 2.66    | 2.13    |
+| OpenVINO_FP32_Sync | 30.40   | 27.34   | 26.64   | 27.95   |
+| OpenVINO_FP16_Sync | 25.93   | 28.37   | 27.37   | 27.75   |
+| OpenVINO_INT8_Sync | 12.29   | 11.86   | 11.49   | 11.65   |
 
 **Throughput (FPS):**
 | Mode               | BS=1    | BS=2    | BS=4    | BS=8    |
 |--------------------|---------|---------|---------|---------|
-| PyTorch CPU        | 23.04   | 22.96   | 22.59   | 22.36   |
-| TensorRT GPU       | 114.52  | 202.25  | 353.88  | 505.57  |
-| OpenVINO FP32 Sync | 40.18   | 39.07   | 38.80   | 33.77   |
-| OpenVINO FP16 Sync | 39.45   | 38.51   | 38.19   | 36.33   |
-| OpenVINO INT8 Sync | 84.11   | 89.00   | 86.23   | 83.91   |
+| PyTorch_CPU        | 25.03   | 24.59   | 24.27   | 23.74   |
+| TensorRT_GPU       | 92.18   | 192.90  | 376.12  | 469.77  |
+| OpenVINO_FP32_Sync | 32.89   | 36.58   | 37.54   | 35.78   |
+| OpenVINO_FP16_Sync | 38.56   | 35.25   | 36.53   | 36.03   |
+| OpenVINO_INT8_Sync | 81.34   | 84.35   | 87.04   | 85.86   |
 
 Key observations from batch benchmark:
-1.  **TensorRT GPU** shows massive throughput scaling with batch size, significantly reducing the time per image.
-2.  **OpenVINO INT8 Sync** provides the best CPU performance and maintains relatively stable time per image, indicating good CPU utilization but potentially hitting a bottleneck preventing further scaling seen on GPU.
-3.  **OpenVINO FP32/FP16 Sync** on CPU show limited scaling benefits from batching in this test; throughput remains relatively flat or slightly decreases.
-4.  **PyTorch CPU** shows minimal change with batch size, confirming its lower efficiency for parallel processing compared to optimized backends.
+1.  **TensorRT GPU** exhibits significant throughput scaling as batch size increases, drastically reducing the average time per image.
+2.  **OpenVINO INT8 Sync** remains the top performer on CPU, demonstrating stable and efficient performance across all batch sizes, with minimal scaling benefits from batching on this CPU setup.
+3.  **OpenVINO FP16 Sync** is now faster than FP32 Sync at Batch Size 1, aligning better with previous single-image tests.
+4.  **OpenVINO FP32 Sync and FP16 Sync** show limited (though slightly positive) scaling benefits from batching on CPU compared to the GPU. At larger batch sizes (2, 4, 8), FP32 Sync performed slightly better or comparably to FP16 Sync in this specific run.
+5.  **PyTorch CPU** remains the slowest and shows negligible performance changes with increasing batch size.
 
 ## Docker Usage
 
@@ -266,16 +267,20 @@ If you encounter issues:
    - Check that CUDA and TensorRT are properly installed
    - If TensorRT model conversion fails, try using the `--skip_convert` option
 3. For OpenVINO issues:
-   - Ensure OpenVINO is correctly installed and configured
-   - Try setting environment variable `export OPENVINO_FORCE_CPU=1`
+    - Ensure OpenVINO is correctly installed and configured
+    - Try setting environment variable `export OPENVINO_FORCE_CPU=1`
 4. For PyTorch issues:
-   - Check PyTorch installation with correct CUDA version
+    - Check PyTorch installation with correct CUDA version
 
-### OpenVINO INT8 Quantization Notes & Tips
+### OpenVINO FP16 & INT8 Quantization Notes & Tips
+
+**Important**: Using `--precision FP16` or `--precision INT8` with OpenVINO requires the corresponding model to be **pre-converted** to that precision *before* running the inference script. The script **will not** perform the conversion automatically during inference.
+- For **FP16**, you can use the `download_model.py` script (which uses `half=True` during export) or manually run `mo --input_model <input_model> --data_type FP16 ...`.
+- For **INT8**, you need to use a quantization tool like NNCF (see below).
 
 Quantizing models to INT8 with OpenVINO can significantly boost CPU performance but might require extra steps and troubleshooting:
 
-1.  **Quantization is Offline**: INT8 inference requires a model pre-quantized using tools like OpenVINO POT or NNCF. It's not an on-the-fly conversion during inference.
+1.  **Quantization is Offline**: INT8 inference requires a model pre-quantized using tools like OpenVINO NNCF. It's not an on-the-fly conversion during inference.
 2.  **POT Tool (Deprecated)**:
     *   The Post-Training Optimization Tool (POT) is officially deprecated, and NNCF is recommended.
     *   If using POT:

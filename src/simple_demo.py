@@ -1053,19 +1053,39 @@ def run_inference(args):
                     else:
                         print(f"Error: --precision INT8 requires a valid --int8_model_dir.")
                         return None
-                else: # FP32 or FP16 - use original logic to find/convert FP32 model
+
+                elif args.precision == 'FP16':
+                    # --- Hardcoded FP16 model path ---
+                    print("Using hardcoded path for FP16 OpenVINO model...")
+                    hardcoded_fp16_path = "models/yolov8n_openvino_fp16_model/yolov8n_fp16.xml"
+
+                    if os.path.exists(hardcoded_fp16_path):
+                        openvino_model_xml = hardcoded_fp16_path
+                        print(f"Found FP16 model at hardcoded path: {openvino_model_xml}")
+                    else:
+                        print(f"Error: Hardcoded FP16 model path does not exist: {hardcoded_fp16_path}")
+                        print(f"Please ensure the model exists at this location or run download_model.py again.")
+                        return None
+                    # --- End of hardcoded path logic ---
+
+                else: # FP32 - use original logic to find FP32 model
                     # Use the existing logic to find FP32 model
+                    print(f"Attempting to find FP32 OpenVINO model based on {args.model}...")
                     potential_paths = []
                     if args.model.endswith('.xml'):
                         potential_paths.append(args.model)
                     elif args.model.endswith('.pt'):
                          # Check 'models' first as per previous findings
-                         potential_paths.append(os.path.join("models", "yolov8n.xml"))
-                         potential_paths.append(args.model.replace('.pt', '_openvino_model/yolov8n.xml')) # Original logic path
+                         potential_paths.append(os.path.join("models", "yolov8n.xml")) # Default location
+                         potential_paths.append(os.path.join("models", "yolov8n_openvino_model", "yolov8n.xml")) # Exported location
+                         potential_paths.append(args.model.replace('.pt', '_openvino_model/yolov8n.xml')) # Older logic path
                          potential_paths.append(args.model.replace('.pt', '.xml'))
                     else: # If args.model is not .pt or .xml, assume it might be a base name
                          potential_paths.append(os.path.join("models", f"{args.model}.xml"))
+                         potential_paths.append(os.path.join("models", f"{args.model}_openvino_model", f"{args.model}.xml"))
 
+                    # Clean potential paths (remove duplicates, ensure they are strings)
+                    potential_paths = sorted(list(set(filter(None, potential_paths))))
 
                     for path in potential_paths:
                        if os.path.exists(path):
@@ -1075,8 +1095,8 @@ def run_inference(args):
 
                     # If FP32 model was not found after checking potential paths, report error and exit
                     if not openvino_model_xml:
-                        print(f"Error: OpenVINO model (.xml) for FP32/FP16 not found. Please ensure the model exists at one of the expected paths or provide the path directly.")
-                        print(f"Checked paths based on {args.model}: {potential_paths}")
+                        print(f"Error: OpenVINO model (.xml) for FP32 not found. Please ensure the model exists at one of the expected paths or provide the path directly.")
+                        print(f"Checked paths: {potential_paths}")
                         return None
 
                 # --- Model Loading --- (This part remains)
@@ -1106,11 +1126,10 @@ def run_inference(args):
                 # --- Configure Compilation ---
                 device = "CPU" # Currently hardcoded, could be made an arg
                 compile_config = {}
-                if args.precision == 'FP16' and not is_int8: # Apply FP16 hint only if not already INT8
-                    compile_config[ov.properties.hint.inference_precision()] = "f16"
-                    print("Set OpenVINO inference precision hint to FP16.")
-                elif is_int8:
+                if is_int8:
                      print("Using INT8 quantized model. No explicit precision hint needed during compilation.")
+                elif args.precision == 'FP16':
+                     print("Using pre-converted FP16 model (hardcoded path). No explicit precision hint needed.")
                 else: # FP32
                      print("Using FP32 precision for OpenVINO.")
 
@@ -2130,7 +2149,9 @@ def run_batch_benchmark(args):
                 precision = config.get("precision", "FP32")
                 int8_dir = config.get("int8_model_dir")
 
+                # <<<--- Start of modified path logic for batch benchmark --->>>
                 if precision == 'INT8':
+                    # --- INT8 Path Logic (remains the same) ---
                     if not int8_dir or not os.path.isdir(int8_dir):
                         raise ValueError(f"INT8 precision requires a valid int8_model_dir, got: {int8_dir}")
                     # Find XML in INT8 dir (Simplified logic from run_inference)
@@ -2139,14 +2160,25 @@ def run_batch_benchmark(args):
                         raise FileNotFoundError(f"No .xml model found in INT8 directory: {int8_dir}")
                     openvino_model_xml = str(xml_files[0]) # Take the first one found
                     print(f"  Found INT8 model: {openvino_model_xml}")
-                else: # FP32 or FP16
-                    # Find base FP32 model (Simplified logic from run_inference)
+                elif precision == 'FP16':
+                    # --- Hardcoded FP16 Path Logic for Batch Benchmark ---
+                    print("  Using hardcoded path for FP16 OpenVINO model in batch benchmark...")
+                    hardcoded_fp16_path = "models/yolov8n_openvino_fp16_model/yolov8n_fp16.xml"
+                    if os.path.exists(hardcoded_fp16_path):
+                        openvino_model_xml = hardcoded_fp16_path
+                        print(f"  Found FP16 model at hardcoded path: {openvino_model_xml}")
+                    else:
+                        print(f"Error: Hardcoded FP16 model path does not exist for batch benchmark: {hardcoded_fp16_path}")
+                        raise FileNotFoundError(f"FP16 model not found at {hardcoded_fp16_path}")
+                else: # FP32
+                    # --- FP32 Path Logic (remains the same) ---
+                    print(f"  Attempting to find FP32 OpenVINO model based on {base_model_path}...")
                     potential_paths = []
-                    if args.model.endswith('.xml'): potential_paths.append(args.model)
-                    elif args.model.endswith('.pt'):
+                    if base_model_path.endswith('.xml'): potential_paths.append(base_model_path)
+                    elif base_model_path.endswith('.pt'):
                          potential_paths.append(os.path.join("models", "yolov8n.xml"))
                          potential_paths.append(args.model.replace('.pt', '_openvino_model/yolov8n.xml'))
-                    else: potential_paths.append(os.path.join("models", f"{args.model}.xml"))
+                    else: potential_paths.append(os.path.join("models", f"{base_model_path}.xml"))
 
                     for path in potential_paths:
                         if os.path.exists(path):
@@ -2155,8 +2187,9 @@ def run_batch_benchmark(args):
                     if not openvino_model_xml:
                          raise FileNotFoundError(f"Base OpenVINO model (.xml) not found for FP32/FP16. Checked: {potential_paths}")
                     print(f"  Found base model for {precision}: {openvino_model_xml}")
+                # <<<--- End of modified path logic for batch benchmark --->>>
 
-                # Read the model
+                # Read the model (Using the determined path)
                 model_ov = core.read_model(openvino_model_xml)
                 print(f"  OpenVINO model read: {openvino_model_xml}")
 
@@ -2164,12 +2197,13 @@ def run_batch_benchmark(args):
                 # We will handle reshaping and recompiling within the batch loop if needed
                 # Compile with initial batch size (usually 1) or check if dynamic
                 compile_config = {}
-                if precision == 'FP16' and precision != 'INT8':
-                    compile_config[ov.properties.hint.inference_precision()] = "f16"
+                # REMOVED: FP16 hint is redundant when loading a pre-converted FP16 model.
+                # The following block was removed:
+                # if precision == 'FP16' and precision != 'INT8':
+                #    compile_config[ov.properties.hint.inference_precision()] = "f16"
 
-                print(f"  Initial OpenVINO compile for {device} ({precision})...")
-                # Keep the initially compiled model accessible for reshaping later if needed
-                # compiled_model = core.compile_model(model_ov, device, compile_config) # Compile happens in loop now
+                print(f"  Preparing OpenVINO settings for {device} ({precision})...")
+                # Compile happens inside the batch loop after potential reshape
 
             # <<< Model loading complete >>>
 
